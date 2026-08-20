@@ -48,9 +48,10 @@ final class NativeLZ4 {
         return null;
     }
 
-    /** LZ4_compress_default — returns compressed size, or 0 on failure. */
+    /** Returns compressed size, or 0 on failure. */
     static native int compress(byte[] src, int srcOff, int srcLen,
-                               byte[] dst, int dstOff, int dstLen);
+                               byte[] dst, int dstOff, int dstLen,
+                               int maxChain);
 
     /** LZ4_decompress_safe — returns decompressed size, or negative on error. */
     static native int decompress(byte[] src, int srcOff, int srcLen,

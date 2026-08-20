@@ -89,7 +89,8 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
 JNIEXPORT jint JNICALL
 Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     jbyteArray jSrc, jint src_off, jint src_len,
-    jbyteArray jDst, jint dst_off, jint dst_len)
+    jbyteArray jDst, jint dst_off, jint dst_len,
+    jint max_chain)
 {
     (void)cls;
     lz4_stream_t *s = get_stream();
@@ -101,7 +102,7 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     int result = lz4_compress_block(s,
                      (const uint8_t *)(src + src_off),
                      (uint8_t *)(dst + dst_off),
-                     src_len, 1);
+                     src_len, max_chain);
     (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);
     (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
     return result;

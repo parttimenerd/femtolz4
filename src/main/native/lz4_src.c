@@ -5,6 +5,10 @@
 
 #include "lz4.h"
 
+#ifdef __ARM_NEON
+#  include <arm_neon.h>
+#endif
+
 /*
  * LZ4 frame format  https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
  *
@@ -93,9 +97,105 @@ static uint32_t lz4__hash(const uint8_t *p)
 /* Push position into the hash chain for src[pos]. */
 static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
-    uint32_t h        = lz4__hash(src + pos);
+    uint32_t h             = lz4__hash(src + pos);
     s->tail[pos & WINDOW_MASK] = s->head[h];
-    s->head[h]        = pos;
+    s->head[h]             = pos;
+}
+
+/*
+ * Find the longest match for src[pos] and return its length and distance.
+ * Returns 0 if no match of MIN_MATCH or better was found.
+ *
+ * On NEON targets the 8-byte-at-a-time extension loop is replaced by a
+ * 16-byte NEON compare that halves the number of iterations on long matches.
+ */
+static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
+                            int pos, int src_len, int max_chain,
+                            int *out_dist)
+{
+    int max_match = (src_len - PADDING_LITERALS) - pos;
+    if (max_match < MIN_MATCH) return 0;
+
+    int      limit     = MAX(pos - WINDOW_SIZE, NIL);
+    int      chain_len = max_chain;
+    uint32_t h         = lz4__hash(src + pos);
+    uint32_t pos4;
+    memcpy(&pos4, src + pos, 4);
+
+    int best_len  = 0;
+    int best_dist = 0;
+
+    for (int sv = s->head[h]; sv > limit; sv = s->tail[sv & WINDOW_MASK]) {
+        uint32_t sv4;
+        memcpy(&sv4, src + sv, 4);
+
+        /* Quick filter: first 4 bytes and the byte at the current best
+           length must both match before we invest in full extension. */
+        if (sv4 != pos4 || src[sv + best_len] != src[pos + best_len]) {
+            if (--chain_len == 0) break;
+            continue;
+        }
+
+        /* Extend the match as far as possible. */
+        int len = MIN_MATCH;
+
+#ifdef __ARM_NEON
+        /* 16-byte NEON extension: compare 16 bytes at a time and use
+           vceqq_u8 + vclzq_u32 to find the first differing byte. */
+        while (len + 16 <= max_match) {
+            uint8x16_t sv16  = vld1q_u8(src + sv  + len);
+            uint8x16_t pos16 = vld1q_u8(src + pos + len);
+            uint8x16_t eq    = vceqq_u8(sv16, pos16);
+            /* eq has 0x00 at the first mismatch, 0xFF elsewhere.
+               vmvnq_u8 flips it; vreinterpretq treats it as four u32 lanes.
+               We find the first non-zero lane with a scalar search. */
+            uint32x4_t ne = vreinterpretq_u32_u8(vmvnq_u8(eq));
+            uint32_t ne0 = vgetq_lane_u32(ne, 0);
+            uint32_t ne1 = vgetq_lane_u32(ne, 1);
+            uint32_t ne2 = vgetq_lane_u32(ne, 2);
+            uint32_t ne3 = vgetq_lane_u32(ne, 3);
+            if (ne0 | ne1 | ne2 | ne3) {
+                /* Find which byte within the 16 differed. */
+                if (ne0) { len += __builtin_ctz(ne0) >> 3; }
+                else if (ne1) { len += 4 + (__builtin_ctz(ne1) >> 3); }
+                else if (ne2) { len += 8 + (__builtin_ctz(ne2) >> 3); }
+                else          { len += 12 + (__builtin_ctz(ne3) >> 3); }
+                goto done_extend;
+            }
+            len += 16;
+        }
+#endif
+        /* 8-byte scalar extension.  A nonzero XOR locates the first
+           differing byte via ctz (LE) or clz (BE). */
+        while (len + 8 <= max_match) {
+            uint64_t sv8, pos8;
+            memcpy(&sv8,  src + sv  + len, 8);
+            memcpy(&pos8, src + pos + len, 8);
+            uint64_t diff = sv8 ^ pos8;
+            if (diff) {
+#ifdef LZ4_LITTLE_ENDIAN
+                len += __builtin_ctzll(diff) >> 3;
+#else
+                len += __builtin_clzll(diff) >> 3;
+#endif
+                goto done_extend;
+            }
+            len += 8;
+        }
+        while (len < max_match && src[sv + len] == src[pos + len])
+            ++len;
+        done_extend:
+
+        if (len > best_len) {
+            best_len  = len;
+            best_dist = pos - sv;
+            if (len == max_match) break;
+        }
+        if (--chain_len == 0) break;
+    }
+
+    *out_dist = best_dist;
+    return best_len;
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
@@ -115,57 +215,25 @@ int lz4_compress_block(lz4_stream_t *s,
     int pos       = 0;
 
     while (pos < src_len) {
-        int match_len  = 0;
         int match_dist = 0;
-        int max_match  = (src_len - PADDING_LITERALS) - pos;
+        int match_len  = lz4__best_match(s, src, pos, src_len, max_chain, &match_dist);
 
-        /* ── hash-chain search ── */
-        if (max_match >= MIN_LOOKAHEAD - PADDING_LITERALS) {
-            int      limit     = MAX(pos - WINDOW_SIZE, NIL);
-            int      chain_len = max_chain;
-            uint32_t h         = lz4__hash(src + pos);
-            uint32_t pos4;
-            memcpy(&pos4, src + pos, 4);
+        /* Track whether pos was pre-inserted by the lazy probe. */
+        int pos_inserted = 0;
 
-            for (int sv = s->head[h]; sv > limit; sv = s->tail[sv & WINDOW_MASK]) {
-                uint32_t sv4;
-                memcpy(&sv4, src + sv, 4);
-
-                /* Quick filter: first 4 bytes and the byte at the current best
-                   length must both match before we invest in full extension. */
-                if (sv4 != pos4 || src[sv + match_len] != src[pos + match_len]) {
-                    if (--chain_len == 0) break;
-                    continue;
-                }
-
-                /* Extend 8 bytes at a time via XOR.  A nonzero XOR locates
-                   the first differing byte via ctz (LE) or clz (BE). */
-                int len = MIN_MATCH;
-                while (len + 8 <= max_match) {
-                    uint64_t sv8, pos8;
-                    memcpy(&sv8,  src + sv  + len, 8);
-                    memcpy(&pos8, src + pos + len, 8);
-                    uint64_t diff = sv8 ^ pos8;
-                    if (diff) {
-#ifdef LZ4_LITTLE_ENDIAN
-                        len += __builtin_ctzll(diff) >> 3;
-#else
-                        len += __builtin_clzll(diff) >> 3;
-#endif
-                        goto done_extend;
-                    }
-                    len += 8;
-                }
-                while (len < max_match && src[sv + len] == src[pos + len])
-                    ++len;
-                done_extend:
-
-                if (len > match_len) {
-                    match_len  = len;
-                    match_dist = pos - sv;
-                    if (len == max_match) break;
-                }
-                if (--chain_len == 0) break;
+        /* ── lazy matching ──────────────────────────────────────────────────
+         * Skip lazy matching at max_chain==1 (pure speed mode); the extra
+         * probe cost outweighs the ratio gain at that chain depth. */
+        if (match_len >= MIN_MATCH && max_chain > 1 && pos + 1 < src_len) {
+            lz4__insert(s, src, pos);   /* insert pos before checking pos+1 */
+            pos_inserted = 1;
+            int lazy_dist = 0;
+            int lazy_len  = lz4__best_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
+            if (lazy_len > match_len) {
+                /* pos becomes a literal; the better match starts at pos+1 */
+                pos++;
+                match_len  = lazy_len;
+                match_dist = lazy_dist;
             }
         }
 
@@ -186,8 +254,13 @@ int lz4_compress_block(lz4_stream_t *s,
 
             /* Stride-2 at max_chain==1: covers the same search space with
                half the insert cost on long matches. */
-            int stride = (max_chain == 1) ? 2 : 1;
-            while (pos < lit_start) { lz4__insert(s, src, pos); pos += stride; }
+            int stride       = (max_chain == 1) ? 2 : 1;
+            /* pos was pre-inserted by the lazy probe; skip it. */
+            int insert_from  = pos_inserted ? pos + 1 : pos;
+            while (insert_from < lit_start) {
+                lz4__insert(s, src, insert_from);
+                insert_from += stride;
+            }
             pos = lit_start;
         } else {
             lz4__insert(s, src, pos++);

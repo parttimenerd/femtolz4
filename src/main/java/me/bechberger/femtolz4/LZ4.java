@@ -49,7 +49,7 @@ public final class LZ4 {
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
         if (NativeLZ4.AVAILABLE) {
-            int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
+            int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff, maxChain);
             if (n > 0) return n;
         }
         return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
@@ -94,14 +94,50 @@ public final class LZ4 {
                 }
             }
 
+            // Lazy matching: only at maxChain>1 (ratio mode); the extra probe
+            // cost outweighs the gain at chain depth 1 (pure speed mode).
+            boolean posInserted = false;
+            if (matchLen >= MIN_MATCH && maxChain > 1 && pos <= safeEnd - 3) {
+                if (pos <= safeEnd) insert(head, tail, src, pos);
+                posInserted = true;
+                int lazyLen  = 0;
+                int lazyDist = 0;
+                int lazyPos  = pos + 1;
+                int maxMatch = safeEnd - lazyPos;
+                int limit    = lazyPos - WINDOW_SIZE;
+                int chainLeft = maxChain;
+                int h        = hash5(src, lazyPos);
+                for (int sv = head[h]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
+                    if (get4(src, sv) != get4(src, lazyPos)
+                            || src[sv + lazyLen] != src[lazyPos + lazyLen]) {
+                        if (--chainLeft == 0) break;
+                        continue;
+                    }
+                    int len = extend(src, sv, lazyPos, maxMatch);
+                    if (len > lazyLen) {
+                        lazyLen  = len;
+                        lazyDist = lazyPos - sv;
+                        if (len == maxMatch) break;
+                    }
+                    if (--chainLeft == 0) break;
+                }
+                if (lazyLen > matchLen) {
+                    pos++;           // pos becomes a literal
+                    matchLen  = lazyLen;
+                    matchDist = lazyDist;
+                }
+            }
+
             if (matchLen >= MIN_MATCH) {
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
                 int stride = (maxChain == 1) ? 2 : 1;
-                int limit  = Math.min(litStart, safeEnd + 1);
-                while (pos < limit)  { insert(head, tail, src, pos); pos += stride; }
+                // pos may already have been inserted by the lazy probe above
+                int insertFrom = posInserted ? pos + 1 : pos;
+                int insertEnd  = Math.min(litStart, safeEnd + 1);
+                while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom += stride; }
                 pos = litStart;
             } else {
                 if (pos <= safeEnd) insert(head, tail, src, pos);
