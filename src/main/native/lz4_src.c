@@ -8,6 +8,9 @@
 #ifdef __ARM_NEON
 #  include <arm_neon.h>
 #endif
+#ifdef __SSE2__
+#  include <emmintrin.h>
+#endif
 
 /*
  * LZ4 frame format  https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
@@ -106,8 +109,12 @@ static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
  * Find the longest match for src[pos] and return its length and distance.
  * Returns 0 if no match of MIN_MATCH or better was found.
  *
- * On NEON targets the 8-byte-at-a-time extension loop is replaced by a
- * 16-byte NEON compare that halves the number of iterations on long matches.
+ * Match extension: after the mandatory 4-byte prefix check we extend as far
+ * as the data allows, 16 bytes at a time using SIMD where available, then
+ * 8 bytes at a time scalar, then byte-by-byte for the last fragment.
+ *
+ * NEON (aarch64) and SSE2 (x86-64) are both baseline ISA features on their
+ * respective 64-bit targets — no runtime check needed.
  */
 static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
                             int pos, int src_len, int max_chain,
@@ -140,26 +147,42 @@ static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
         int len = MIN_MATCH;
 
 #ifdef __ARM_NEON
-        /* 16-byte NEON extension: compare 16 bytes at a time and use
-           vceqq_u8 + vclzq_u32 to find the first differing byte. */
+        /* NEON: load 16 bytes from each side, compare, find the first
+           differing byte using vceqq_u8 and per-lane ctz. */
         while (len + 16 <= max_match) {
             uint8x16_t sv16  = vld1q_u8(src + sv  + len);
             uint8x16_t pos16 = vld1q_u8(src + pos + len);
             uint8x16_t eq    = vceqq_u8(sv16, pos16);
-            /* eq has 0x00 at the first mismatch, 0xFF elsewhere.
-               vmvnq_u8 flips it; vreinterpretq treats it as four u32 lanes.
-               We find the first non-zero lane with a scalar search. */
+            /* eq is 0xFF where bytes match, 0x00 where they differ.
+               Invert and view as four u32 lanes; find the first non-zero lane. */
             uint32x4_t ne = vreinterpretq_u32_u8(vmvnq_u8(eq));
             uint32_t ne0 = vgetq_lane_u32(ne, 0);
             uint32_t ne1 = vgetq_lane_u32(ne, 1);
             uint32_t ne2 = vgetq_lane_u32(ne, 2);
             uint32_t ne3 = vgetq_lane_u32(ne, 3);
             if (ne0 | ne1 | ne2 | ne3) {
-                /* Find which byte within the 16 differed. */
-                if (ne0) { len += __builtin_ctz(ne0) >> 3; }
-                else if (ne1) { len += 4 + (__builtin_ctz(ne1) >> 3); }
-                else if (ne2) { len += 8 + (__builtin_ctz(ne2) >> 3); }
-                else          { len += 12 + (__builtin_ctz(ne3) >> 3); }
+                if      (ne0) len +=  0 + (__builtin_ctz(ne0) >> 3);
+                else if (ne1) len +=  4 + (__builtin_ctz(ne1) >> 3);
+                else if (ne2) len +=  8 + (__builtin_ctz(ne2) >> 3);
+                else          len += 12 + (__builtin_ctz(ne3) >> 3);
+                goto done_extend;
+            }
+            len += 16;
+        }
+#elif defined(__SSE2__)
+        /* SSE2: same idea with _mm_cmpeq_epi8 + _mm_movemask_epi8.
+           movemask collapses the 16 comparison bits into a 16-bit integer
+           whose trailing-zero count gives the byte offset of the first
+           mismatch directly, no lane arithmetic needed. */
+        while (len + 16 <= max_match) {
+            __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
+            __m128i pos16 = _mm_loadu_si128((const __m128i *)(src + pos + len));
+            int     mask  = _mm_movemask_epi8(_mm_cmpeq_epi8(sv16, pos16));
+            /* mask has a 1-bit for every matching byte.  If any byte
+               differs, mask != 0xFFFF; ctz on the inverted mask gives the
+               position of the first mismatch. */
+            if (mask != 0xFFFF) {
+                len += __builtin_ctz(~mask);
                 goto done_extend;
             }
             len += 16;
@@ -221,9 +244,27 @@ int lz4_compress_block(lz4_stream_t *s,
         /* Track whether pos was pre-inserted by the lazy probe. */
         int pos_inserted = 0;
 
-        /* ── lazy matching ──────────────────────────────────────────────────
-         * Skip lazy matching at max_chain==1 (pure speed mode); the extra
-         * probe cost outweighs the ratio gain at that chain depth. */
+        /* ── lazy matching ─────────────────────────────────────────────────
+         *
+         * Greedy LZ4 emits the first match it finds at each position and
+         * advances past it.  This can miss a better opportunity one position
+         * later: a match of length 7 at pos beats a match of length 5 at
+         * pos-1 in every metric (fewer tokens, smaller output), but greedy
+         * would commit to the shorter one first.
+         *
+         * Lazy matching fixes this by peeking one position ahead before
+         * committing.  The algorithm:
+         *   1. Find the best match M at pos (length L, distance D).
+         *   2. Insert pos into the hash table (so pos+1 can reference it).
+         *   3. Find the best match M' at pos+1 (length L', distance D').
+         *   4. If L' > L: discard M, emit pos as a literal, and commit to M'
+         *      starting at pos+1.  Otherwise keep M.
+         *
+         * Cost: one extra hash probe per matched position (~20-30% more work
+         * per byte of match).  Benefit: typically 3-7% better ratio on real
+         * data.  Not worth it at max_chain==1 (pure throughput mode) because
+         * the chain is too shallow for the lazy probe to find anything the
+         * original pass missed — gate it behind max_chain > 1. */
         if (match_len >= MIN_MATCH && max_chain > 1 && pos + 1 < src_len) {
             lz4__insert(s, src, pos);   /* insert pos before checking pos+1 */
             pos_inserted = 1;
