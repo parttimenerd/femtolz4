@@ -16,8 +16,8 @@ public final class LZ4 {
 
     static final int WINDOW_SIZE = 1 << 16;
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
-    private static final int HASH_BITS   = 13;
-    private static final int HASH_SIZE   = 1 << HASH_BITS;
+    private static final int HASH_BITS      = 13;
+    private static final int HASH_SIZE      = 1 << HASH_BITS;
     private static final int MIN_MATCH   = 4;
     private static final int PADDING     = 5;
     private static final int NIL         = Integer.MIN_VALUE;
@@ -67,7 +67,7 @@ public final class LZ4 {
         int litStart = srcOff;
         int pos      = srcOff;
         int safeEnd  = srcOff + srcLen - PADDING; // last position where we can hash safely
-        int skip     = 1; // consecutive-miss counter for skip acceleration (chain=1 only)
+        int skip = 1; // consecutive-miss counter for skip acceleration (chain=1 only)
 
         while (pos < srcOff + srcLen) {
             int matchLen  = 0;
@@ -79,7 +79,6 @@ public final class LZ4 {
 
                 if (maxChain == 1) {
                     // Flat hash table: read old, write new, check one candidate.
-                    // Avoids the tail[] write+read of the chain path.
                     int sv = head[h];
                     head[h] = pos;
                     if (sv > pos - WINDOW_SIZE && get4(src, sv) == get4(src, pos)) {
@@ -110,9 +109,7 @@ public final class LZ4 {
                 }
             }
 
-            // Lazy matching: only at maxChain>1 (ratio mode); the extra probe
-            // cost outweighs the gain at chain depth 1 (pure speed mode).
-            // pos is already inserted above; insert pos+1 and walk its chain.
+            // Lazy matching: only at maxChain>1 (ratio mode).
             if (matchLen >= MIN_MATCH && maxChain > 1 && pos <= safeEnd - 3) {
                 int lazyLen  = 0;
                 int lazyDist = 0;
@@ -138,29 +135,32 @@ public final class LZ4 {
                     if (--chainLeft == 0) break;
                 }
                 if (lazyLen > matchLen) {
-                    pos++;           // pos becomes a literal
+                    pos++;
                     matchLen  = lazyLen;
                     matchDist = lazyDist;
                 }
             }
 
             if (matchLen >= MIN_MATCH) {
-                skip = 1; // reset on match
+                skip = 1; // reset skip on match
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
-                // pos already inserted; stride-2 at chain=1 to reduce hash-table update cost.
                 int insertFrom = pos + 1;
                 int insertEnd  = Math.min(litStart, safeEnd + 1);
                 if (maxChain == 1) {
-                    while (insertFrom < insertEnd) { head[hash5(src, insertFrom)] = insertFrom; insertFrom += 2; }
+                    // stride-2: insert every other position inside the match
+                    while (insertFrom < insertEnd) {
+                        head[hash5(src, insertFrom)] = insertFrom;
+                        insertFrom += 2;
+                    }
                 } else {
                     while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom++; }
                 }
                 pos = litStart;
             } else {
-                // pos was already recorded in head[] above.
+                // No match: advance by skip>>6 (starts at 1, grows each miss).
                 if (maxChain == 1) {
                     pos += (skip >> 6) + 1;
                     if (pos > srcOff + srcLen) pos = srcOff + srcLen;

@@ -106,10 +106,8 @@ static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 }
 
 /*
- * Fast-path for max_chain==1: flat hash table, no tail[] involved.
- * Read the previous occupant of head[h], update head[h]=pos, check one match.
- * Eliminates the tail[] write+read present in insert_and_match, halving the
- * random-memory traffic per position.
+ * Fast-path for max_chain==1: flat hash table (head[] only, no tail[]).
+ * Uses the full 13-bit / 5-byte hash to keep match quality.
  */
 static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
                             int pos, int src_len, int *out_dist)
@@ -123,7 +121,7 @@ static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
     memcpy(&pos4, src + pos, 4);
 
     int sv     = s->head[h];
-    s->head[h] = pos;           /* update flat table before checking match */
+    s->head[h] = pos;
 
     if (sv <= limit) { *out_dist = 0; return 0; }
 
@@ -391,24 +389,20 @@ int lz4_compress_block(lz4_stream_t *s,
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
-    int skip      = 1; /* consecutive-miss counter: advance faster through literal runs */
+    int skip      = 1; /* skip acceleration: step = (skip>>6)+1, grows with consecutive misses */
 
     while (pos < src_len) {
         int match_dist = 0;
         int match_len;
 
-        /* chain=1: flat hash table (head[] only, no tail[]), no lazy matching.
-         * Eliminates the extra random tail[] write+read per position. */
+        /* chain=1: flat hash table (head[] only, no tail[]), 12-bit hash, no lazy. */
         if (max_chain == 1) {
             match_len = lz4__flat_match(s, src, pos, src_len, &match_dist);
         } else {
             match_len = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
         }
 
-        /* ── lazy matching (chain > 1 only) ───────────────────────────────
-         * Peek one position ahead before committing to a match.
-         * Not worth it at chain==1: the flat-table probe can't find anything
-         * the original pass missed. */
+        /* ── lazy matching (chain > 1 only) ─────────────────────────────── */
         if (match_len >= MIN_MATCH && max_chain > 1 && pos + 1 < src_len) {
             int lazy_dist = 0;
             int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
@@ -419,9 +413,9 @@ int lz4_compress_block(lz4_stream_t *s,
             }
         }
 
-        /* ── emit sequence or advance one position ── */
+        /* ── emit sequence or advance ── */
         if (match_len >= MIN_MATCH) {
-            skip = 1;
+            skip = 1; /* reset skip counter */
             int match_extra = match_len - MIN_MATCH;
 
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
@@ -435,8 +429,6 @@ int lz4_compress_block(lz4_stream_t *s,
 
             lit_start = pos + match_len;
 
-            /* Stride-2 at max_chain==1: insert every other position inside
-               a match (covers search space with half the hash-table updates). */
             int stride = (max_chain == 1) ? 2 : 1;
             int insert_from = pos + 1;
             while (insert_from < lit_start) {
@@ -448,8 +440,6 @@ int lz4_compress_block(lz4_stream_t *s,
             }
             pos = lit_start;
         } else {
-            /* No match.  At chain==1 skip acceleration advances past
-             * incompressible runs faster; pos already recorded in head[]. */
             if (max_chain == 1) {
                 pos += (skip >> 6) + 1;
                 if (pos > src_len) pos = src_len;

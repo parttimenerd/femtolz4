@@ -109,78 +109,78 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           344 |             962 | 1,77x |
-| femto-native         |           100 |            1565 | 1,97x |
-| femto-java-fast      |           408 |             874 | 1,77x |
-| femto-java           |            88 |            1310 | 1,97x |
-| yawkat-native        |          1043 |             348 | 1,76x |
-| yawkat-java          |           390 |            1268 | 1,73x |
+| femto-native-fast    |           338 |             968 | 1,77x |
+| femto-native         |           103 |            1592 | 1,97x |
+| femto-java-fast      |           336 |             966 | 1,77x |
+| femto-java           |            97 |            1393 | 1,97x |
+| yawkat-native        |          1131 |             309 | 1,76x |
+| yawkat-java          |           227 |            1329 | 1,73x |
 
 ### cpu_profile.jfr (1 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           581 |            1520 | 2,25x |
-| femto-native         |           127 |            1628 | 2,44x |
-| femto-java-fast      |           535 |            1032 | 2,25x |
-| femto-java           |           110 |            1402 | 2,44x |
-| yawkat-native        |          1057 |             874 | 2,22x |
-| yawkat-java          |           480 |            1304 | 2,20x |
+| femto-native-fast    |           614 |            1474 | 2,25x |
+| femto-native         |           126 |            1584 | 2,44x |
+| femto-java-fast      |           560 |            1057 | 2,25x |
+| femto-java           |           114 |            1362 | 2,44x |
+| yawkat-native        |          1052 |             939 | 2,22x |
+| yawkat-java          |           519 |            1249 | 2,20x |
 
 ### HA_gc_details.jfr (3 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           567 |            1404 | 1,73x |
-| femto-native         |            97 |            1686 | 1,95x |
-| femto-java-fast      |           547 |            1301 | 1,73x |
-| femto-java           |            82 |            1348 | 1,95x |
-| yawkat-native        |           920 |            1487 | 1,68x |
-| yawkat-java          |           476 |            1280 | 1,72x |
+| femto-native-fast    |           573 |            1407 | 1,73x |
+| femto-native         |            98 |            1555 | 1,95x |
+| femto-java-fast      |           535 |            1285 | 1,73x |
+| femto-java           |            83 |            1329 | 1,95x |
+| yawkat-native        |           944 |            1559 | 1,68x |
+| yawkat-java          |           470 |            1252 | 1,72x |
 
 ### jvm17-gc-jfc.jfr (7 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           651 |            1651 | 2,27x |
-| femto-native         |           129 |            1758 | 2,47x |
-| femto-java-fast      |           625 |            1463 | 2,27x |
-| femto-java           |           109 |            1577 | 2,47x |
-| yawkat-native        |          1166 |            1187 | 2,23x |
-| yawkat-java          |           596 |            1451 | 2,26x |
+| femto-native-fast    |           649 |            1623 | 2,27x |
+| femto-native         |           130 |            1789 | 2,47x |
+| femto-java-fast      |           611 |            1474 | 2,27x |
+| femto-java           |           112 |            1602 | 2,47x |
+| yawkat-native        |          1193 |            1245 | 2,23x |
+| yawkat-java          |           593 |            1436 | 2,26x |
 
 ### flight.jfr (13 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           738 |            2109 | 2,79x |
-| femto-native         |           158 |            2284 | 2,99x |
-| femto-java-fast      |           673 |            1829 | 2,79x |
-| femto-java           |           135 |            1989 | 2,99x |
-| yawkat-native        |          1344 |            1719 | 2,75x |
-| yawkat-java          |           630 |            1536 | 2,78x |
+| femto-native-fast    |           740 |            2128 | 2,79x |
+| femto-native         |           155 |            2136 | 2,99x |
+| femto-java-fast      |           659 |            1824 | 2,79x |
+| femto-java           |           136 |            1976 | 2,99x |
+| yawkat-native        |          1369 |            1712 | 2,75x |
+| yawkat-java          |           627 |            1521 | 2,78x |
 
 ### failure.jfr (19 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           753 |            2627 | 2,60x |
-| femto-native         |           191 |            2692 | 2,62x |
-| femto-java-fast      |           839 |            1498 | 2,60x |
-| femto-java           |           154 |            1480 | 2,62x |
-| yawkat-native        |          1421 |            1378 | 2,60x |
-| yawkat-java          |           841 |            1406 | 2,60x |
+| femto-native-fast    |           744 |            2603 | 2,60x |
+| femto-native         |           193 |            2621 | 2,62x |
+| femto-java-fast      |           845 |            1512 | 2,60x |
+| femto-java           |           152 |            1481 | 2,62x |
+| yawkat-native        |          1449 |            1412 | 2,60x |
+| yawkat-java          |           839 |            1387 | 2,60x |
 
 ### large_test.bin (267 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast    |           718 |            2407 | 2,60x |
-| femto-native         |           185 |            2222 | 2,62x |
-| femto-java-fast      |           740 |            1291 | 2,60x |
-| femto-java           |           154 |            1468 | 2,62x |
-| yawkat-native        |          1342 |            1390 | 2,60x |
-| yawkat-java          |           840 |            1396 | 2,60x |
+| femto-native-fast    |           716 |            2372 | 2,60x |
+| femto-native         |           187 |            2228 | 2,62x |
+| femto-java-fast      |           734 |            1280 | 2,60x |
+| femto-java           |           149 |            1336 | 2,62x |
+| yawkat-native        |          1391 |            1399 | 2,60x |
+| yawkat-java          |           841 |            1381 | 2,60x |
 <!-- BENCHMARK:END -->
 
 ## License
