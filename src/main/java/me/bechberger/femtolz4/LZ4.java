@@ -78,8 +78,11 @@ public final class LZ4 {
                 int limit     = pos - WINDOW_SIZE;
                 int chainLeft = maxChain;
                 int h         = hash5(src, pos);
+                // Insert pos first so we walk from the second chain entry (single hash).
+                tail[pos & WINDOW_MASK] = head[h];
+                head[h] = pos;
 
-                for (int sv = head[h]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
+                for (int sv = tail[pos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
                     if (get4(src, sv) != get4(src, pos)
                             || src[sv + matchLen] != src[pos + matchLen]) {
                         if (--chainLeft == 0) break;
@@ -97,10 +100,8 @@ public final class LZ4 {
 
             // Lazy matching: only at maxChain>1 (ratio mode); the extra probe
             // cost outweighs the gain at chain depth 1 (pure speed mode).
-            boolean posInserted = false;
+            // pos is already inserted above; insert pos+1 and walk its chain.
             if (matchLen >= MIN_MATCH && maxChain > 1 && pos <= safeEnd - 3) {
-                if (pos <= safeEnd) insert(head, tail, src, pos);
-                posInserted = true;
                 int lazyLen  = 0;
                 int lazyDist = 0;
                 int lazyPos  = pos + 1;
@@ -108,7 +109,9 @@ public final class LZ4 {
                 int limit    = lazyPos - WINDOW_SIZE;
                 int chainLeft = maxChain;
                 int h        = hash5(src, lazyPos);
-                for (int sv = head[h]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
+                tail[lazyPos & WINDOW_MASK] = head[h];
+                head[h] = lazyPos;
+                for (int sv = tail[lazyPos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
                     if (get4(src, sv) != get4(src, lazyPos)
                             || src[sv + lazyLen] != src[lazyPos + lazyLen]) {
                         if (--chainLeft == 0) break;
@@ -136,13 +139,13 @@ public final class LZ4 {
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
                 int stride = (maxChain == 1) ? 2 : 1;
-                // pos may already have been inserted by the lazy probe above
-                int insertFrom = posInserted ? pos + 1 : pos;
+                // pos (and pos+1 if lazy fired) are already in the chain.
+                int insertFrom = pos + 1;
                 int insertEnd  = Math.min(litStart, safeEnd + 1);
                 while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom += stride; }
                 pos = litStart;
             } else {
-                if (pos <= safeEnd) insert(head, tail, src, pos);
+                // pos was already inserted at top of the hash block above.
                 if (maxChain == 1) {
                     pos += (skip >> 6) + 1;
                     if (pos > srcOff + srcLen) pos = srcOff + srcLen;
