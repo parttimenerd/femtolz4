@@ -16,7 +16,7 @@ public final class LZ4 {
 
     static final int WINDOW_SIZE = 1 << 16;
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
-    private static final int HASH_BITS   = 16;
+    private static final int HASH_BITS   = 13;
     private static final int HASH_SIZE   = 1 << HASH_BITS;
     private static final int MIN_MATCH   = 4;
     private static final int PADDING     = 5;

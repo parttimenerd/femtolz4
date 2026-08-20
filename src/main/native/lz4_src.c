@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "lz4.h"
@@ -25,7 +26,7 @@
 #define PADDING_LITERALS 5
 #define WINDOW_MASK      (WINDOW_SIZE - 1)
 #define MIN_MATCH        4
-#define HASH_BITS        16
+#define HASH_BITS        13
 #define NIL              (-1)
 #define MIN_LOOKAHEAD    (PADDING_LITERALS + MIN_MATCH + 2)
 
