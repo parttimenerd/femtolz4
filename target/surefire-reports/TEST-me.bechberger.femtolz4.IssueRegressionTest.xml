@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="me.bechberger.femtolz4.IssueRegressionTest" time="0.348" tests="12" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report-3.0.xsd" version="3.0" name="me.bechberger.femtolz4.IssueRegressionTest" time="0.343" tests="12" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="25"/>
     <property name="sun.jnu.encoding" value="UTF-8"/>
@@ -12,7 +12,7 @@
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="user.country" value="DE"/>
     <property name="sun.boot.library.path" value="/Users/i560383_1/.sdkman/candidates/java/25.0.3-graal/lib"/>
-    <property name="sun.java.command" value="/Users/i560383_1/code/experiments/femtolz4/target/surefire/surefirebooter-20260820190323157_3.jar /Users/i560383_1/code/experiments/femtolz4/target/surefire 2026-08-20T19-03-23_110-jvmRun1 surefire-20260820190323157_1tmp surefire_0-20260820190323157_2tmp"/>
+    <property name="sun.java.command" value="/Users/i560383_1/code/experiments/femtolz4/target/surefire/surefirebooter-20260820191254204_3.jar /Users/i560383_1/code/experiments/femtolz4/target/surefire 2026-08-20T19-12-54_159-jvmRun1 surefire-20260820191254204_1tmp surefire_0-20260820191254204_2tmp"/>
     <property name="jdk.debug" value="release"/>
     <property name="surefire.test.class.path" value="/Users/i560383_1/code/experiments/femtolz4/target/test-classes:/Users/i560383_1/code/experiments/femtolz4/target/classes:/Users/i560383_1/.m2/repository/org/junit/jupiter/junit-jupiter/5.10.2/junit-jupiter-5.10.2.jar:/Users/i560383_1/.m2/repository/org/junit/jupiter/junit-jupiter-api/5.10.2/junit-jupiter-api-5.10.2.jar:/Users/i560383_1/.m2/repository/org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar:/Users/i560383_1/.m2/repository/org/junit/platform/junit-platform-commons/1.10.2/junit-platform-commons-1.10.2.jar:/Users/i560383_1/.m2/repository/org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar:/Users/i560383_1/.m2/repository/org/junit/jupiter/junit-jupiter-params/5.10.2/junit-jupiter-params-5.10.2.jar:/Users/i560383_1/.m2/repository/org/junit/jupiter/junit-jupiter-engine/5.10.2/junit-jupiter-engine-5.10.2.jar:/Users/i560383_1/.m2/repository/org/junit/platform/junit-platform-engine/1.10.2/junit-platform-engine-1.10.2.jar:/Users/i560383_1/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/lz4-java-1.11.0.jar:"/>
     <property name="sun.cpu.endian" value="little"/>
@@ -28,7 +28,7 @@
     <property name="java.specification.name" value="Java Platform API Specification"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
     <property name="apple.awt.application.name" value="ForkedBooter"/>
-    <property name="surefire.real.class.path" value="/Users/i560383_1/code/experiments/femtolz4/target/surefire/surefirebooter-20260820190323157_3.jar"/>
+    <property name="surefire.real.class.path" value="/Users/i560383_1/code/experiments/femtolz4/target/surefire/surefirebooter-20260820191254204_3.jar"/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="25.0.3+9-LTS-jvmci-b01"/>
     <property name="user.name" value="i560383"/>
@@ -56,16 +56,16 @@
     <property name="sun.io.unicode.encoding" value="UnicodeBig"/>
     <property name="java.class.version" value="69.0"/>
   </properties>
-  <testcase name="issue83_nativeCompressDecompressNoLeak" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.305"/>
+  <testcase name="issue83_nativeCompressDecompressNoLeak" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.311"/>
   <testcase name="emptyStreamThrowsLZ4Exception" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.003"/>
   <testcase name="outputOverflowThrows" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
   <testcase name="issue45_availableAfterPartialRead" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.002"/>
   <testcase name="doubleCloseOutputStream" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
   <testcase name="emptyFrameRoundTrip" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
-  <testcase name="badMagicThrowsLZ4Exception" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
-  <testcase name="zeroMatchOffsetThrows" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.0"/>
-  <testcase name="singleByteWritesBulkRead" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.016"/>
+  <testcase name="badMagicThrowsLZ4Exception" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.0"/>
+  <testcase name="zeroMatchOffsetThrows" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
+  <testcase name="singleByteWritesBulkRead" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.009"/>
   <testcase name="issue39_45_availableOnFreshStream" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
   <testcase name="concatenatedFrames" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.0"/>
-  <testcase name="issue30_javaAndNativeProduceSameDecompressibleOutput" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.002"/>
+  <testcase name="issue30_javaAndNativeProduceSameDecompressibleOutput" classname="me.bechberger.femtolz4.IssueRegressionTest" time="0.001"/>
 </testsuite>

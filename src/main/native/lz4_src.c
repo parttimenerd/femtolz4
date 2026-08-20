@@ -105,6 +105,79 @@ static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
     s->head[h]             = pos;
 }
 
+/*
+ * Fast-path for max_chain==1: flat hash table, no tail[] involved.
+ * Read the previous occupant of head[h], update head[h]=pos, check one match.
+ * Eliminates the tail[] write+read present in insert_and_match, halving the
+ * random-memory traffic per position.
+ */
+static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
+                            int pos, int src_len, int *out_dist)
+{
+    int max_match = (src_len - PADDING_LITERALS) - pos;
+    if (max_match < MIN_MATCH) { s->head[lz4__hash(src + pos)] = pos; return 0; }
+
+    int      limit = MAX(pos - WINDOW_SIZE, NIL);
+    uint32_t h     = lz4__hash(src + pos);
+    uint32_t pos4;
+    memcpy(&pos4, src + pos, 4);
+
+    int sv     = s->head[h];
+    s->head[h] = pos;           /* update flat table before checking match */
+
+    if (sv <= limit) { *out_dist = 0; return 0; }
+
+    uint32_t sv4;
+    memcpy(&sv4, src + sv, 4);
+    if (sv4 != pos4) { *out_dist = 0; return 0; }
+
+    int len = MIN_MATCH;
+#ifdef __ARM_NEON
+    while (len + 16 <= max_match) {
+        uint8x16_t sv16  = vld1q_u8(src + sv  + len);
+        uint8x16_t pos16 = vld1q_u8(src + pos + len);
+        uint8x16_t eq    = vceqq_u8(sv16, pos16);
+        uint32x4_t ne    = vreinterpretq_u32_u8(vmvnq_u8(eq));
+        uint32_t ne0 = vgetq_lane_u32(ne, 0), ne1 = vgetq_lane_u32(ne, 1);
+        uint32_t ne2 = vgetq_lane_u32(ne, 2), ne3 = vgetq_lane_u32(ne, 3);
+        if (ne0 | ne1 | ne2 | ne3) {
+            if      (ne0) len +=  0 + (__builtin_ctz(ne0) >> 3);
+            else if (ne1) len +=  4 + (__builtin_ctz(ne1) >> 3);
+            else if (ne2) len +=  8 + (__builtin_ctz(ne2) >> 3);
+            else          len += 12 + (__builtin_ctz(ne3) >> 3);
+            goto flat_done;
+        }
+        len += 16;
+    }
+#elif defined(__SSE2__)
+    while (len + 16 <= max_match) {
+        __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
+        __m128i pos16 = _mm_loadu_si128((const __m128i *)(src + pos + len));
+        int     mask  = _mm_movemask_epi8(_mm_cmpeq_epi8(sv16, pos16));
+        if (mask != 0xFFFF) { len += __builtin_ctz(~mask); goto flat_done; }
+        len += 16;
+    }
+#endif
+    while (len + 8 <= max_match) {
+        uint64_t sv8, pos8;
+        memcpy(&sv8, src + sv + len, 8); memcpy(&pos8, src + pos + len, 8);
+        uint64_t diff = sv8 ^ pos8;
+        if (diff) {
+#ifdef LZ4_LITTLE_ENDIAN
+            len += __builtin_ctzll(diff) >> 3;
+#else
+            len += __builtin_clzll(diff) >> 3;
+#endif
+            goto flat_done;
+        }
+        len += 8;
+    }
+    while (len < max_match && src[sv + len] == src[pos + len]) ++len;
+    flat_done:
+    *out_dist = pos - sv;
+    return len;
+}
+
 /* Insert pos and find its best match in one pass (single hash computation). */
 static int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
                                   int pos, int src_len, int max_chain,
@@ -322,36 +395,24 @@ int lz4_compress_block(lz4_stream_t *s,
 
     while (pos < src_len) {
         int match_dist = 0;
-        int match_len  = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
+        int match_len;
 
-        /* ── lazy matching ─────────────────────────────────────────────────
-         *
-         * Greedy LZ4 emits the first match it finds at each position and
-         * advances past it.  This can miss a better opportunity one position
-         * later: a match of length 7 at pos beats a match of length 5 at
-         * pos-1 in every metric (fewer tokens, smaller output), but greedy
-         * would commit to the shorter one first.
-         *
-         * Lazy matching fixes this by peeking one position ahead before
-         * committing.  The algorithm:
-         *   1. Find the best match M at pos (length L, distance D).
-         *   2. Insert pos into the hash table (so pos+1 can reference it).
-         *   3. Find the best match M' at pos+1 (length L', distance D').
-         *   4. If L' > L: discard M, emit pos as a literal, and commit to M'
-         *      starting at pos+1.  Otherwise keep M.
-         *
-         * Cost: one extra hash probe per matched position (~20-30% more work
-         * per byte of match).  Benefit: typically 3-7% better ratio on real
-         * data.  Not worth it at max_chain==1 (pure throughput mode) because
-         * the chain is too shallow for the lazy probe to find anything the
-         * original pass missed — gate it behind max_chain > 1. */
-        /* pos was already inserted by insert_and_match above. */
-        int pos_inserted = 1;
+        /* chain=1: flat hash table (head[] only, no tail[]), no lazy matching.
+         * Eliminates the extra random tail[] write+read per position. */
+        if (max_chain == 1) {
+            match_len = lz4__flat_match(s, src, pos, src_len, &match_dist);
+        } else {
+            match_len = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
+        }
+
+        /* ── lazy matching (chain > 1 only) ───────────────────────────────
+         * Peek one position ahead before committing to a match.
+         * Not worth it at chain==1: the flat-table probe can't find anything
+         * the original pass missed. */
         if (match_len >= MIN_MATCH && max_chain > 1 && pos + 1 < src_len) {
             int lazy_dist = 0;
             int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
             if (lazy_len > match_len) {
-                /* pos becomes a literal; the better match starts at pos+1 */
                 pos++;
                 match_len  = lazy_len;
                 match_dist = lazy_dist;
@@ -360,7 +421,7 @@ int lz4_compress_block(lz4_stream_t *s,
 
         /* ── emit sequence or advance one position ── */
         if (match_len >= MIN_MATCH) {
-            skip = 1; /* reset skip counter on every match */
+            skip = 1;
             int match_extra = match_len - MIN_MATCH;
 
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
@@ -374,22 +435,21 @@ int lz4_compress_block(lz4_stream_t *s,
 
             lit_start = pos + match_len;
 
-            /* Stride-2 at max_chain==1: covers the same search space with
-               half the insert cost on long matches. */
+            /* Stride-2 at max_chain==1: insert every other position inside
+               a match (covers search space with half the hash-table updates). */
             int stride = (max_chain == 1) ? 2 : 1;
-            /* pos (and pos+1 if lazy fired) are already in the chain. */
             int insert_from = pos + 1;
             while (insert_from < lit_start) {
-                lz4__insert(s, src, insert_from);
+                if (max_chain == 1)
+                    s->head[lz4__hash(src + insert_from)] = insert_from;
+                else
+                    lz4__insert(s, src, insert_from);
                 insert_from += stride;
             }
             pos = lit_start;
         } else {
-            /* No match: pos was already inserted by insert_and_match.
-             * At max_chain==1 (fast mode), use skip acceleration: after
-             * consecutive misses, stride grows so we scan incompressible
-             * regions faster.  skip encodes the stride in its high bits;
-             * capped at 17 to bound ratio cost. */
+            /* No match.  At chain==1 skip acceleration advances past
+             * incompressible runs faster; pos already recorded in head[]. */
             if (max_chain == 1) {
                 pos += (skip >> 6) + 1;
                 if (pos > src_len) pos = src_len;

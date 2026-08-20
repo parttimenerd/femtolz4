@@ -75,26 +75,38 @@ public final class LZ4 {
 
             if (pos <= safeEnd - 2) {  // need 2 bytes slack for hash5's 5th byte
                 int maxMatch  = safeEnd - pos;
-                int limit     = pos - WINDOW_SIZE;
-                int chainLeft = maxChain;
                 int h         = hash5(src, pos);
-                // Insert pos first so we walk from the second chain entry (single hash).
-                tail[pos & WINDOW_MASK] = head[h];
-                head[h] = pos;
 
-                for (int sv = tail[pos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
-                    if (get4(src, sv) != get4(src, pos)
-                            || src[sv + matchLen] != src[pos + matchLen]) {
-                        if (--chainLeft == 0) break;
-                        continue;
-                    }
-                    int len = extend(src, sv, pos, maxMatch);
-                    if (len > matchLen) {
-                        matchLen  = len;
+                if (maxChain == 1) {
+                    // Flat hash table: read old, write new, check one candidate.
+                    // Avoids the tail[] write+read of the chain path.
+                    int sv = head[h];
+                    head[h] = pos;
+                    if (sv > pos - WINDOW_SIZE && get4(src, sv) == get4(src, pos)) {
+                        matchLen  = extend(src, sv, pos, maxMatch);
                         matchDist = pos - sv;
-                        if (len == maxMatch) break;
                     }
-                    if (--chainLeft == 0) break;
+                } else {
+                    int limit     = pos - WINDOW_SIZE;
+                    int chainLeft = maxChain;
+                    // Insert pos first so we walk from the second chain entry (single hash).
+                    tail[pos & WINDOW_MASK] = head[h];
+                    head[h] = pos;
+
+                    for (int sv = tail[pos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
+                        if (get4(src, sv) != get4(src, pos)
+                                || src[sv + matchLen] != src[pos + matchLen]) {
+                            if (--chainLeft == 0) break;
+                            continue;
+                        }
+                        int len = extend(src, sv, pos, maxMatch);
+                        if (len > matchLen) {
+                            matchLen  = len;
+                            matchDist = pos - sv;
+                            if (len == maxMatch) break;
+                        }
+                        if (--chainLeft == 0) break;
+                    }
                 }
             }
 
@@ -138,14 +150,17 @@ public final class LZ4 {
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
-                int stride = (maxChain == 1) ? 2 : 1;
-                // pos (and pos+1 if lazy fired) are already in the chain.
+                // pos already inserted; stride-2 at chain=1 to reduce hash-table update cost.
                 int insertFrom = pos + 1;
                 int insertEnd  = Math.min(litStart, safeEnd + 1);
-                while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom += stride; }
+                if (maxChain == 1) {
+                    while (insertFrom < insertEnd) { head[hash5(src, insertFrom)] = insertFrom; insertFrom += 2; }
+                } else {
+                    while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom++; }
+                }
                 pos = litStart;
             } else {
-                // pos was already inserted at top of the hash block above.
+                // pos was already recorded in head[] above.
                 if (maxChain == 1) {
                     pos += (skip >> 6) + 1;
                     if (pos > srcOff + srcLen) pos = srcOff + srcLen;

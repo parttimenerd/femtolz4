@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: me.bechberger.femtolz4.IssueRegressionTest
 -------------------------------------------------------------------------------
-Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.348 s -- in me.bechberger.femtolz4.IssueRegressionTest
+Tests run: 12, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.343 s -- in me.bechberger.femtolz4.IssueRegressionTest
