@@ -138,7 +138,7 @@ static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
 
         /* Quick filter: first 4 bytes and the byte at the current best
            length must both match before we invest in full extension. */
-        if (sv4 != pos4 || src[sv + best_len] != src[pos + best_len]) {
+        if (__builtin_expect(sv4 != pos4 || src[sv + best_len] != src[pos + best_len], 1)) {
             if (--chain_len == 0) break;
             continue;
         }

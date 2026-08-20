@@ -17,7 +17,7 @@
 
 /* One stream per thread, initialised lazily.  lz4_init() resets only head[],
    so repeated calls within the same thread skip the initial malloc and only
-   pay the 32 KB memset once per compress call. */
+   pay the head[] memset (~32 KB) once per compress call. */
 static _Thread_local lz4_stream_t *tl_stream = NULL;
 
 static lz4_stream_t *get_stream(void)
@@ -45,7 +45,7 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         int mex     = token & 0xF;
         int b;
 
-        if (lit_len == 15) {
+        if (__builtin_expect(lit_len == 15, 0)) {
             do {
                 if (ip >= src_end) return -1;
                 b = src[ip++];
@@ -66,7 +66,7 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         if (offset == 0) return -5;
 
         int match_len = D_MIN_MATCH + mex;
-        if (mex == 15) {
+        if (__builtin_expect(mex == 15, 0)) {
             do {
                 if (ip >= src_end) return -6;
                 b = src[ip++];
@@ -78,12 +78,20 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         if (ms < dst_off)             return -7;
         if (op + match_len > dst_end) return -8;
         if (offset >= match_len) {
-            /* No overlap: bulk copy is safe and fast. */
+            /* No overlap: bulk copy. */
             memcpy(dst + op, dst + ms, match_len);
+        } else if (offset == 1) {
+            /* Run of one repeated byte: fill is fastest. */
+            memset(dst + op, dst[ms], match_len);
         } else {
-            /* Overlap (offset < match_len): must copy byte-by-byte so that
-               earlier output bytes are "replicated" into later positions. */
-            for (int i = 0; i < match_len; i++) dst[op + i] = dst[ms + i];
+            /* Overlap: copy `offset` bytes at a time so earlier output
+               bytes are replicated forward (like a SIMD splat). */
+            int i = 0;
+            while (i + offset <= match_len) {
+                memcpy(dst + op + i, dst + ms + i, offset);
+                i += offset;
+            }
+            memcpy(dst + op + i, dst + ms + i, match_len - i);
         }
         op += match_len;
     }

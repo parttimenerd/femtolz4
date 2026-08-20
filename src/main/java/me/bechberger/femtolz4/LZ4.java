@@ -322,10 +322,18 @@ public final class LZ4 {
 
     /** Copy match bytes, handling overlap (offset < matchLen). */
     private static void copyMatch(byte[] buf, int src, int dst, int len) {
-        if (dst - src >= len) {
+        int offset = dst - src;
+        if (offset >= len) {
             System.arraycopy(buf, src, buf, dst, len);
+        } else if (offset == 1) {
+            Arrays.fill(buf, dst, dst + len, buf[src]);
         } else {
-            for (int i = 0; i < len; i++) buf[dst + i] = buf[src + i];
+            int i = 0;
+            while (i + offset <= len) {
+                System.arraycopy(buf, src + i, buf, dst + i, offset);
+                i += offset;
+            }
+            if (i < len) System.arraycopy(buf, src + i, buf, dst + i, len - i);
         }
     }
 
