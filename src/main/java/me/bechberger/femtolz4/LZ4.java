@@ -59,10 +59,6 @@ public final class LZ4 {
 
     private static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff, int maxChain) {
-        // chain=1 fast path: short[] stores pos & 0xFFFF (16KB vs 32KB int[]).
-        // Since WINDOW_SIZE == 65536 == 1<<16, the low 16 bits are a unique
-        // identifier within the window; we recover the full position by
-        // matching against (pos & ~0xFFFF | slot) adjusted for wrap-around.
         if (maxChain == 1) {
             return compressFast(src, srcOff, srcLen, dst, dstOff);
         }
@@ -76,10 +72,10 @@ public final class LZ4 {
         int op       = dstOff;
         int litStart = srcOff;
         int pos      = srcOff;
-        int safeEnd  = srcOff + srcLen - PADDING; // last position where we can hash safely
-        int skip = 1; // consecutive-miss counter for skip acceleration (chain=1 only)
+        int srcEnd   = srcOff + srcLen;
+        int safeEnd  = srcEnd - PADDING; // last position where we can hash safely
 
-        while (pos < srcOff + srcLen) {
+        while (pos < srcEnd) {
             int matchLen  = 0;
             int matchDist = 0;
 
@@ -146,7 +142,7 @@ public final class LZ4 {
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
                 int insertFrom = pos + 1;
-                int insertEnd  = Math.min(litStart, safeEnd + 1);
+                int insertEnd  = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
                 while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom++; }
                 pos = litStart;
             } else {
@@ -155,7 +151,7 @@ public final class LZ4 {
         }
 
         // final literal run — no match follows
-        int litLen = (srcOff + srcLen) - litStart;
+        int litLen = srcEnd - litStart;
         if (litLen > 0) {
             op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
         }
@@ -173,14 +169,16 @@ public final class LZ4 {
         int op       = dstOff;
         int litStart = srcOff;
         int pos      = srcOff;
-        int safeEnd  = srcOff + srcLen - PADDING;
+        int srcEnd   = srcOff + srcLen;
+        int safeEnd  = srcEnd - PADDING;
+        int safeEnd2 = safeEnd - 2;
         int skip     = 1;
 
-        while (pos < srcOff + srcLen) {
+        while (pos < srcEnd) {
             int matchLen  = 0;
             int matchDist = 0;
 
-            if (pos <= safeEnd - 2) {
+            if (pos <= safeEnd2) {
                 int limit = pos - WINDOW_SIZE;
                 int h     = hash4(src, pos);
                 int sv    = head[h];
@@ -197,23 +195,23 @@ public final class LZ4 {
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
-                litStart = pos + matchLen;
-                // stride-2: insert every other position inside the match
+                int matchEnd = pos + matchLen;
+                litStart = matchEnd;
                 int insertFrom = pos + 1;
-                int insertEnd  = Math.min(litStart, safeEnd + 1);
+                int insertEnd  = matchEnd < safeEnd2 ? matchEnd : safeEnd2 + 1;
                 while (insertFrom < insertEnd) {
                     head[hash4(src, insertFrom)] = insertFrom;
                     insertFrom += 2;
                 }
-                pos = litStart;
+                pos = matchEnd;
             } else {
                 pos += (skip >> 6) + 1;
-                if (pos > srcOff + srcLen) pos = srcOff + srcLen;
+                if (pos > srcEnd) pos = srcEnd;
                 if (skip < (17 << 6)) skip++;
             }
         }
 
-        int litLen = (srcOff + srcLen) - litStart;
+        int litLen = srcEnd - litStart;
         if (litLen > 0) op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
         return op - dstOff;
     }
@@ -366,7 +364,7 @@ public final class LZ4 {
     private static int emitSequence(byte[] src, int litStart, int litLen,
                                     int matchExtra, int matchDist,
                                     byte[] dst, int op) {
-        dst[op++] = (byte) ((Math.min(litLen, 15) << 4) | Math.min(matchExtra, 15));
+        dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
         if (litLen >= 15)  op = writeOverflow(dst, op, litLen - 15);
         if (litLen > 0)  { System.arraycopy(src, litStart, dst, op, litLen); op += litLen; }
         if (matchDist > 0) {

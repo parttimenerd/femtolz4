@@ -172,7 +172,9 @@ public class Benchmark {
         System.out.printf("%-18s  %8s  %8s  %6s%n", "impl", "comp MB/s", "dec MB/s", "ratio");
         System.out.println("-".repeat(50));
 
-        for (String path : FILES) {
+        // Use command-line file paths if provided, otherwise fall back to default FILES list
+        String[] filePaths = args.length > 0 ? args : FILES;
+        for (String path : filePaths) {
             Path p = Path.of(path);
             if (!Files.exists(p)) continue;
             byte[] data = Files.readAllBytes(p);
