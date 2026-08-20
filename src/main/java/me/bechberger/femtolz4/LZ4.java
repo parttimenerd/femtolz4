@@ -67,6 +67,7 @@ public final class LZ4 {
         int litStart = srcOff;
         int pos      = srcOff;
         int safeEnd  = srcOff + srcLen - PADDING; // last position where we can hash safely
+        int skip     = 1; // consecutive-miss counter for skip acceleration (chain=1 only)
 
         while (pos < srcOff + srcLen) {
             int matchLen  = 0;
@@ -129,6 +130,7 @@ public final class LZ4 {
             }
 
             if (matchLen >= MIN_MATCH) {
+                skip = 1; // reset on match
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
@@ -141,7 +143,13 @@ public final class LZ4 {
                 pos = litStart;
             } else {
                 if (pos <= safeEnd) insert(head, tail, src, pos);
-                pos++;
+                if (maxChain == 1) {
+                    pos += (skip >> 6) + 1;
+                    if (pos > srcOff + srcLen) pos = srcOff + srcLen;
+                    if (skip < (17 << 6)) skip++;
+                } else {
+                    pos++;
+                }
             }
         }
 
@@ -161,10 +169,15 @@ public final class LZ4 {
     }
 
     /** Pure-Java compress, bypassing the native path. For benchmarking. */
-    static byte[] compressJava(byte[] src) {
+    static byte[] compressJava(byte[] src, int maxChain) {
         byte[] dst = new byte[maxCompressedLength(src.length)];
-        int len = compressJavaImpl(src, 0, src.length, dst, 0, 1);
+        int len = compressJavaImpl(src, 0, src.length, dst, 0, maxChain);
         return Arrays.copyOf(dst, len);
+    }
+
+    /** Pure-Java compress at chain=1, bypassing the native path. For benchmarking. */
+    static byte[] compressJava(byte[] src) {
+        return compressJava(src, 1);
     }
 
     // ── Decompress ────────────────────────────────────────────────────────────
@@ -309,7 +322,11 @@ public final class LZ4 {
 
     /** Copy match bytes, handling overlap (offset < matchLen). */
     private static void copyMatch(byte[] buf, int src, int dst, int len) {
-        for (int i = 0; i < len; i++) buf[dst + i] = buf[src + i];
+        if (dst - src >= len) {
+            System.arraycopy(buf, src, buf, dst, len);
+        } else {
+            for (int i = 0; i < len; i++) buf[dst + i] = buf[src + i];
+        }
     }
 
     private LZ4() {}

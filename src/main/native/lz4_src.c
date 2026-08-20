@@ -236,6 +236,7 @@ int lz4_compress_block(lz4_stream_t *s,
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
+    int skip      = 1; /* consecutive-miss counter: advance faster through literal runs */
 
     while (pos < src_len) {
         int match_dist = 0;
@@ -280,6 +281,7 @@ int lz4_compress_block(lz4_stream_t *s,
 
         /* ── emit sequence or advance one position ── */
         if (match_len >= MIN_MATCH) {
+            skip = 1; /* reset skip counter on every match */
             int match_extra = match_len - MIN_MATCH;
 
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
@@ -304,7 +306,19 @@ int lz4_compress_block(lz4_stream_t *s,
             }
             pos = lit_start;
         } else {
-            lz4__insert(s, src, pos++);
+            /* No match: insert and advance.  At max_chain==1 (fast mode), use
+             * skip acceleration: after consecutive misses, stride grows so we
+             * scan incompressible regions faster.  skip encodes the stride in
+             * its high bits; capped at 17 to bound ratio cost. */
+            if (pos + PADDING_LITERALS < src_len)
+                lz4__insert(s, src, pos);
+            if (max_chain == 1) {
+                pos += (skip >> 6) + 1;
+                if (pos > src_len) pos = src_len;
+                if (skip < (17 << 6)) skip++;
+            } else {
+                pos++;
+            }
         }
     }
 

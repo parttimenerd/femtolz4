@@ -97,7 +97,7 @@ jobs:
           path: src/main/resources/native/linux-amd64
 
       - name: Run tests
-        run: mvn --no-transfer-progress test
+        run: mvn --no-transfer-progress test -Dnative.skip=true
 
   # ── 4. Package and upload JAR ────────────────────────────────────────────────
   package:
@@ -127,7 +127,7 @@ jobs:
           path: src/main/resources/native/linux-amd64
 
       - name: Build JAR
-        run: mvn --no-transfer-progress package -DskipTests
+        run: mvn --no-transfer-progress package -DskipTests -Dnative.skip=true
 
       - name: Show JAR size
         run: ls -lh target/femtolz4-*.jar

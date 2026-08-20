@@ -42,19 +42,35 @@ public class Benchmark {
         byte[] decompress(byte[] comp, int originalLen);
     }
 
-    // ── femtolz4 (native path active when available) ──────────────────────────
+    // ── femtolz4 fast (chain=1, matches yawkat fastCompressor) ───────────────
 
-    static final Impl FEMTO = new Impl() {
-        public String name() { return LZ4.isNativeAvailable() ? "femto-native" : "femto-java"; }
+    static final Impl FEMTO_FAST = new Impl() {
+        public String name() { return LZ4.isNativeAvailable() ? "femto-native-fast" : "femto-java-fast"; }
         public byte[] compress(byte[] s) { return LZ4.compress(s, 1); }
         public byte[] decompress(byte[] c, int n) { return LZ4.decompress(c, n); }
     };
 
-    // ── femtolz4 pure-Java (direct call, no native dispatch) ──────────────────
+    // ── femtolz4 normal (chain=8, matches yawkat fastCompressor default) ──────
+
+    static final Impl FEMTO = new Impl() {
+        public String name() { return LZ4.isNativeAvailable() ? "femto-native" : "femto-java"; }
+        public byte[] compress(byte[] s) { return LZ4.compress(s, 8); }
+        public byte[] decompress(byte[] c, int n) { return LZ4.decompress(c, n); }
+    };
+
+    // ── femtolz4 pure-Java fast (direct call, chain=1) ───────────────────────
+
+    static final Impl FEMTO_JAVA_FAST = new Impl() {
+        public String name() { return "femto-java-fast"; }
+        public byte[] compress(byte[] s) { return LZ4.compressJava(s); }
+        public byte[] decompress(byte[] c, int n) { return LZ4.decompressJava(c, n); }
+    };
+
+    // ── femtolz4 pure-Java normal (direct call, chain=8) ─────────────────────
 
     static final Impl FEMTO_JAVA = new Impl() {
         public String name() { return "femto-java"; }
-        public byte[] compress(byte[] s) { return LZ4.compressJava(s); }
+        public byte[] compress(byte[] s) { return LZ4.compressJava(s, 8); }
         public byte[] decompress(byte[] c, int n) { return LZ4.decompressJava(c, n); }
     };
 
@@ -145,7 +161,8 @@ public class Benchmark {
     // ── Main ──────────────────────────────────────────────────────────────────
 
     public static void main(String[] args) throws Exception {
-        List<Impl> impls = new ArrayList<>(Arrays.asList(FEMTO, FEMTO_JAVA));
+        List<Impl> impls = new ArrayList<>(Arrays.asList(
+                FEMTO_FAST, FEMTO, FEMTO_JAVA_FAST, FEMTO_JAVA));
         Impl yn = yawkImpl(yawkNative, "yawkat-native");
         Impl yj = yawkImpl(yawkJava,   "yawkat-java");
         if (yn != null) impls.add(yn);

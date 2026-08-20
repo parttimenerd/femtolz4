@@ -77,8 +77,14 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         int ms = op - offset;
         if (ms < dst_off)             return -7;
         if (op + match_len > dst_end) return -8;
-        /* byte-by-byte copy handles overlap (when offset < match_len) */
-        for (int i = 0; i < match_len; i++) dst[op + i] = dst[ms + i];
+        if (offset >= match_len) {
+            /* No overlap: bulk copy is safe and fast. */
+            memcpy(dst + op, dst + ms, match_len);
+        } else {
+            /* Overlap (offset < match_len): must copy byte-by-byte so that
+               earlier output bytes are "replicated" into later positions. */
+            for (int i = 0; i < match_len; i++) dst[op + i] = dst[ms + i];
+        }
         op += match_len;
     }
     return op - dst_off;

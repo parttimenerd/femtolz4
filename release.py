@@ -120,7 +120,7 @@ def main() -> None:
         if not args.skip_tests:
             print("  2. mvn test")
         print("  3. python3 build_native.py")
-        print("  4. mvn package -DskipTests")
+        print("  4. mvn package -DskipTests -Dnative.skip=true")
         print(f"  5. git add + commit + tag v{new}")
         if not args.no_push:
             print("  6. git push + git push --tags")
@@ -145,8 +145,8 @@ def main() -> None:
         # 3. Native libs
         run(["python3", "build_native.py"], "Building native libraries")
 
-        # 4. Package
-        run(["mvn", "package", "-DskipTests"], "Packaging JAR")
+        # 4. Package (native libs already built by step 3)
+        run(["mvn", "package", "-DskipTests", "-Dnative.skip=true"], "Packaging JAR")
 
         # 5. Commit + tag
         git("add",
