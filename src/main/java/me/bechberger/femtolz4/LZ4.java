@@ -28,16 +28,26 @@ public final class LZ4 {
 
     // ── Compress ──────────────────────────────────────────────────────────────
 
+    /** True when the native library was loaded successfully. */
+    public static boolean isNativeAvailable() { return NativeLZ4.AVAILABLE; }
+
     /**
      * Compress {@code srcLen} bytes from {@code src[srcOff..]} into {@code dst[dstOff..]}.
      * {@code dst} must hold at least {@link #maxCompressedLength}({@code srcLen}) bytes.
      *
-     * @param maxChain hash-chain depth: 1 = fastest, ≥64 = better ratio
+     * <p>Uses the native lz4 library when available (ignores {@code maxChain}),
+     * otherwise falls back to the pure-Java implementation.
+     *
+     * @param maxChain hash-chain depth for pure-Java path: 1 = fastest, ≥64 = better ratio
      * @return number of bytes written into dst
      */
     public static int compress(byte[] src, int srcOff, int srcLen,
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
+        if (NativeLZ4.AVAILABLE) {
+            int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
+            if (n > 0) return n;
+        }
 
         int[] head = new int[HASH_SIZE];
         int[] tail = new int[WINDOW_SIZE];
@@ -111,11 +121,18 @@ public final class LZ4 {
      * Decompress an LZ4 block from {@code src[srcOff..srcOff+srcLen)} into
      * {@code dst[dstOff..dstOff+dstLen)}.
      *
+     * <p>Uses the native lz4 library when available, otherwise the pure-Java implementation.
+     *
      * @return number of bytes written into dst
      * @throws LZ4Exception on malformed input
      */
     public static int decompress(byte[] src, int srcOff, int srcLen,
                                  byte[] dst, int dstOff, int dstLen) {
+        if (NativeLZ4.AVAILABLE) {
+            int n = NativeLZ4.decompress(src, srcOff, srcLen, dst, dstOff, dstLen);
+            if (n >= 0) return n;
+            throw new LZ4Exception("native LZ4 decompress failed (error " + n + ")");
+        }
         int ip     = srcOff;
         int srcEnd = srcOff + srcLen;
         int op     = dstOff;

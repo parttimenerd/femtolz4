@@ -1,5 +1,7 @@
-me/bechberger/femtolz4/LZ4.class
+me/bechberger/femtolz4/Main.class
 me/bechberger/femtolz4/XXHash32.class
 me/bechberger/femtolz4/LZ4Exception.class
+me/bechberger/femtolz4/NativeLZ4.class
+me/bechberger/femtolz4/LZ4.class
 me/bechberger/femtolz4/LZ4FrameOutputStream.class
 me/bechberger/femtolz4/LZ4FrameInputStream.class
