@@ -75,7 +75,7 @@ static void lz4__emit_literals(uint8_t *dst, int *op,
     if (lit_len >= 15)
         lz4__write_length_overflow(dst, op, lit_len);
     if (lit_len > 0) {
-        lz4__copy(dst + *op, src + lit_start, lit_len);
+        memcpy(dst + *op, src + lit_start, lit_len);
         *op += lit_len;
     }
 }
