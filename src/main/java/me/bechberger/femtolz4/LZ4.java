@@ -56,7 +56,8 @@ public final class LZ4 {
     }
 
     private static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
-                                        byte[] dst, int dstOff, int maxChain) {        int[] head = new int[HASH_SIZE];
+                                        byte[] dst, int dstOff, int maxChain) {
+        int[] head = new int[HASH_SIZE];
         int[] tail = new int[WINDOW_SIZE];
         Arrays.fill(head, NIL);
         // tail needs no fill: chain walks start from head[h] which is NIL until

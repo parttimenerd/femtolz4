@@ -9,29 +9,29 @@
  * LZ4 frame format  https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
  *
  * Header:  [magic 4B][FLG 1B][BD 1B][HC 1B]
- * Blocks:  [size 4B LE][data]  (size high bit = 1 → stored uncompressed)
+ * Blocks:  [size 4B LE][data]   (size high bit = 1 → stored uncompressed)
  * Footer:  [0x00000000 4B]
  *
  * FLG 0x60 — version=01, block_independent=1, no checksums
  * BD  0x50 — block_maxsize=5 (256 KB)
- * HC       — (xxhash32(FLG+BD) >> 8) & 0xFF
+ * HC       — (xxhash32(FLG ‖ BD) >> 8) & 0xFF
  */
 
-/* Byte-swap a 16-bit value (used on big-endian for the match offset field). */
-#define SWAP16(x) ((uint16_t)((x) >> 8 | (x) << 8))
-
 /* Left-rotate a 32-bit value.  Compilers emit a single ROL instruction. */
-#define ROTL32(x, r) (((x) << (r)) | ((x) >> (32 - (r))))
+#define ROTL32(x, r)   (((x) << (r)) | ((x) >> (32 - (r))))
+
+/* Byte-swap a 16-bit value (used on big-endian for the match-offset field). */
+#define SWAP16(x)      ((uint16_t)((x) >> 8 | (x) << 8))
 
 #define PADDING_LITERALS 5
 #define WINDOW_MASK      (WINDOW_SIZE - 1)
 #define MIN_MATCH        4
-#define HASH_BITS        13
+#define HASH_BITS        LZ4_HASH_BITS
 #define NIL              (-1)
 #define MIN_LOOKAHEAD    (PADDING_LITERALS + MIN_MATCH + 2)
 
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b)  ((a) < (b) ? (a) : (b))
+#define MAX(a, b)  ((a) > (b) ? (a) : (b))
 
 /* ── Primitives ─────────────────────────────────────────────────────────── */
 
@@ -57,8 +57,8 @@ static void lz4__write_length_overflow(uint8_t *dst, int *op, int len)
  * Write one LZ4 sequence token and its literal run.
  *
  * Token byte:  high nibble = literal count (capped at 15)
- *              low  nibble = match length - MIN_MATCH (capped at 15)
- * If either value overflows 15, extra bytes follow (255... then remainder).
+ *              low  nibble = match length − MIN_MATCH (capped at 15)
+ * If either nibble overflows 15, extra bytes follow (255... then remainder).
  */
 static void lz4__emit_literals(uint8_t *dst, int *op,
                                 const uint8_t *src, int lit_start,
@@ -93,16 +93,16 @@ static uint32_t lz4__hash(const uint8_t *p)
 /* Push position into the hash chain for src[pos]. */
 static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
-    uint32_t h = lz4__hash(src + pos);
+    uint32_t h        = lz4__hash(src + pos);
     s->tail[pos & WINDOW_MASK] = s->head[h];
-    s->head[h] = pos;
+    s->head[h]        = pos;
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
 void lz4_init(lz4_stream_t *s)
 {
-    /* tail is always written before it is read, so only head needs init. */
+    /* tail is always written before it is read, so only head needs clearing. */
     memset(s->head, 0xff, sizeof(s->head));
 }
 
@@ -131,7 +131,7 @@ int lz4_compress_block(lz4_stream_t *s,
                 uint32_t sv4;
                 memcpy(&sv4, src + sv, 4);
 
-                /* Quick filter: first 4 bytes and the byte at current best
+                /* Quick filter: first 4 bytes and the byte at the current best
                    length must both match before we invest in full extension. */
                 if (sv4 != pos4 || src[sv + match_len] != src[pos + match_len]) {
                     if (--chain_len == 0) break;
@@ -165,12 +165,11 @@ int lz4_compress_block(lz4_stream_t *s,
                     match_dist = pos - sv;
                     if (len == max_match) break;
                 }
-
                 if (--chain_len == 0) break;
             }
         }
 
-        /* ── emit sequence or advance ── */
+        /* ── emit sequence or advance one position ── */
         if (match_len >= MIN_MATCH) {
             int match_extra = match_len - MIN_MATCH;
 
@@ -195,7 +194,7 @@ int lz4_compress_block(lz4_stream_t *s,
         }
     }
 
-    /* Final literal run — no match follows, so match nibble is 0. */
+    /* Final literal run — no match follows, so the match nibble is 0. */
     if (lit_start != pos)
         lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, 0);
 
@@ -204,14 +203,17 @@ int lz4_compress_block(lz4_stream_t *s,
 
 int lz4_compress(const uint8_t *src, uint8_t *dst, int src_len, int max_chain)
 {
-    lz4_stream_t s;
-    lz4_init(&s);
-    return lz4_compress_block(&s, src, dst, src_len, max_chain);
+    lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
+    if (!s) return 0;
+    lz4_init(s);
+    int n = lz4_compress_block(s, src, dst, src_len, max_chain);
+    free(s);
+    return n;
 }
 
 /* ── LZ4 frame helpers ─────────────────────────────────────────────────── */
 
-/* xxHash-32 (seed=0).  Used only for the 2-byte header checksum input. */
+/* xxHash-32 (seed=0).  Used only for the 1-byte header checksum. */
 static uint32_t lz4__xxhash32(const uint8_t *data, int len)
 {
     static const uint32_t PRIME1 = 0x9E3779B1u;
@@ -222,10 +224,11 @@ static uint32_t lz4__xxhash32(const uint8_t *data, int len)
 
     const uint8_t *p   = data;
     const uint8_t *end = data + len;
-    uint32_t h = (uint32_t)len + PRIME5;  /* seed = 0 */
+    uint32_t h = (uint32_t)len + PRIME5; /* seed = 0 */
 
     for (; p + 4 <= end; p += 4) {
-        uint32_t lane; memcpy(&lane, p, 4);
+        uint32_t lane;
+        memcpy(&lane, p, 4);
         h += lane * PRIME3;
         h  = ROTL32(h, 17) * PRIME4;
     }
@@ -243,9 +246,9 @@ static uint32_t lz4__xxhash32(const uint8_t *data, int len)
 int lz4_frame_write_header(uint8_t *dst)
 {
     dst[0] = 0x04; dst[1] = 0x22; dst[2] = 0x4D; dst[3] = 0x18; /* magic */
-    dst[4] = 0x60;  /* FLG */
-    dst[5] = 0x50;  /* BD  */
-    dst[6] = (uint8_t)((lz4__xxhash32(dst + 4, 2) >> 8) & 0xFF);  /* HC */
+    dst[4] = 0x60; /* FLG */
+    dst[5] = 0x50; /* BD  */
+    dst[6] = (uint8_t)((lz4__xxhash32(dst + 4, 2) >> 8) & 0xFF); /* HC */
     return 7;
 }
 
