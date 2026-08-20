@@ -13,12 +13,24 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ── Thread-local compress stream ────────────────────────────────────────── */
+/* ── Thread-local compress state ─────────────────────────────────────────── */
 
-/* One stream per thread, initialised lazily.  lz4_init() resets only head[],
-   so repeated calls within the same thread skip the initial malloc and only
-   pay the head[] memset (~32 KB) once per compress call. */
+/* chain=1 fast path: 16 KB int table, filled with -1 once at thread-init time.
+   Cross-block references are bounded by the 64 KB window so no reset needed. */
+static _Thread_local int *tl_htab = NULL;
+
+/* chain≥2: full stream (head[] + tail[]), reset (memset head[]) each call. */
 static _Thread_local lz4_stream_t *tl_stream = NULL;
+
+static int *get_htab(void)
+{
+    if (!tl_htab) {
+        tl_htab = (int *)malloc(LZ4_HASH_SIZE_FAST * sizeof(int));
+        if (tl_htab)
+            memset(tl_htab, 0xFF, LZ4_HASH_SIZE_FAST * sizeof(int)); /* fill with -1 */
+    }
+    return tl_htab;
+}
 
 static lz4_stream_t *get_stream(void)
 {
@@ -107,16 +119,28 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     jint max_chain)
 {
     (void)cls;
-    lz4_stream_t *s = get_stream();
-    if (!s) return 0;
-    lz4_init(s); /* reset head[]; tail[] needs no init (written before read) */
-
     jbyte *src = (*env)->GetPrimitiveArrayCritical(env, jSrc, NULL);
     jbyte *dst = (*env)->GetPrimitiveArrayCritical(env, jDst, NULL);
-    int result = lz4_compress_block(s,
+    int result;
+    if (max_chain == 1) {
+        /* chain=1: 16 KB int fast table, reset each call for cross-block safety. */
+        int *htab = get_htab();
+        if (!htab) { result = 0; goto done; }
+        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(int));
+        result = lz4_compress_fast(
+                            (const uint8_t *)(src + src_off),
+                            (uint8_t *)(dst + dst_off),
+                            src_len, htab);
+    } else {
+        lz4_stream_t *s = get_stream();
+        if (!s) { result = 0; goto done; }
+        lz4_init(s);
+        result = lz4_compress_block(s,
                      (const uint8_t *)(src + src_off),
                      (uint8_t *)(dst + dst_off),
                      src_len, max_chain);
+    }
+    done:
     (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);
     (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
     return result;

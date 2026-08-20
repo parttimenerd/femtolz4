@@ -97,6 +97,14 @@ static uint32_t lz4__hash(const uint8_t *p)
     return (v * 0x9E3779B9u) >> (32 - HASH_BITS);
 }
 
+/* 4-byte hash for the chain=1 fast path: one fewer load, ~2x faster. */
+static uint32_t lz4__hash4(const uint8_t *p)
+{
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
+}
+
 /* Push position into the hash chain for src[pos]. */
 static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
@@ -380,6 +388,115 @@ void lz4_init(lz4_stream_t *s)
 {
     /* tail is always written before it is read, so only head needs clearing. */
     memset(s->head, 0xff, sizeof(s->head));
+}
+
+/*
+ * Chain=1 fast-path using an int[LZ4_HASH_SIZE_FAST] hash table (16 KB).
+ * Stores full 32-bit positions — no position-recovery arithmetic needed.
+ * Caller fills the table with -1 (NIL) before the first call.
+ */
+int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
+                      int src_len, int *htab)
+{
+    int op        = 0;
+    int lit_start = 0;
+    int pos       = 0;
+    int skip      = 1;
+    int safe_end  = src_len - PADDING_LITERALS;
+
+    while (pos < src_len) {
+        int match_dist = 0;
+        int match_len  = 0;
+
+        if (pos <= safe_end - 2) {
+            int max_match = safe_end - pos;
+            int limit     = pos - WINDOW_SIZE;
+            uint32_t h    = lz4__hash4(src + pos);
+            uint32_t pos4;
+            memcpy(&pos4, src + pos, 4);
+
+            int sv     = htab[h];
+            htab[h]    = pos;
+
+            if (sv > limit) {
+                uint32_t sv4;
+                memcpy(&sv4, src + sv, 4);
+                if (sv4 == pos4) {
+                    int len = MIN_MATCH;
+#ifdef __ARM_NEON
+                    while (len + 16 <= max_match) {
+                        uint8x16_t sv16  = vld1q_u8(src + sv  + len);
+                        uint8x16_t pos16 = vld1q_u8(src + pos + len);
+                        uint8x16_t eq    = vceqq_u8(sv16, pos16);
+                        uint32x4_t ne    = vreinterpretq_u32_u8(vmvnq_u8(eq));
+                        uint32_t ne0 = vgetq_lane_u32(ne, 0), ne1 = vgetq_lane_u32(ne, 1);
+                        uint32_t ne2 = vgetq_lane_u32(ne, 2), ne3 = vgetq_lane_u32(ne, 3);
+                        if (ne0 | ne1 | ne2 | ne3) {
+                            if      (ne0) len +=  0 + (__builtin_ctz(ne0) >> 3);
+                            else if (ne1) len +=  4 + (__builtin_ctz(ne1) >> 3);
+                            else if (ne2) len +=  8 + (__builtin_ctz(ne2) >> 3);
+                            else          len += 12 + (__builtin_ctz(ne3) >> 3);
+                            goto cf_done;
+                        }
+                        len += 16;
+                    }
+#elif defined(__SSE2__)
+                    while (len + 16 <= max_match) {
+                        __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
+                        __m128i pos16 = _mm_loadu_si128((const __m128i *)(src + pos + len));
+                        int mask = _mm_movemask_epi8(_mm_cmpeq_epi8(sv16, pos16));
+                        if (mask != 0xFFFF) { len += __builtin_ctz(~mask); goto cf_done; }
+                        len += 16;
+                    }
+#endif
+                    while (len + 8 <= max_match) {
+                        uint64_t sv8, pos8;
+                        memcpy(&sv8, src + sv + len, 8); memcpy(&pos8, src + pos + len, 8);
+                        uint64_t diff = sv8 ^ pos8;
+                        if (diff) {
+#ifdef LZ4_LITTLE_ENDIAN
+                            len += __builtin_ctzll(diff) >> 3;
+#else
+                            len += __builtin_clzll(diff) >> 3;
+#endif
+                            goto cf_done;
+                        }
+                        len += 8;
+                    }
+                    while (len < max_match && src[sv + len] == src[pos + len]) ++len;
+                    cf_done:
+                    match_len  = len;
+                    match_dist = pos - sv;
+                }
+            }
+        }
+
+        if (match_len >= MIN_MATCH) {
+            skip = 1;
+            int match_extra = match_len - MIN_MATCH;
+            lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
+#ifdef LZ4_LITTLE_ENDIAN
+            *(uint16_t *)(dst + op) = (uint16_t)match_dist;
+#else
+            *(uint16_t *)(dst + op) = SWAP16((uint16_t)match_dist);
+#endif
+            op += 2;
+            lz4__emit_match_overflow(dst, &op, match_extra);
+            lit_start = pos + match_len;
+            /* stride-2 within-match inserts */
+            for (int i = pos + 1; i < lit_start; i += 2)
+                if (i <= safe_end - 2) htab[lz4__hash4(src + i)] = i;
+            pos = lit_start;
+        } else {
+            pos += (skip >> 6) + 1;
+            if (pos > src_len) pos = src_len;
+            if (skip < (17 << 6)) skip++;
+        }
+    }
+
+    if (lit_start != pos)
+        lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, 0);
+    return op;
 }
 
 int lz4_compress_block(lz4_stream_t *s,

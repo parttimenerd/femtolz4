@@ -24,9 +24,15 @@
 #define EXCESS      (16 + (BLOCK_SIZE / 255))
 #define WINDOW_SIZE (1 << 16)
 
-/* 13-bit hash table: 8192 entries (32 KB), fits in L1 cache. */
+/* 13-bit hash table: 8192 entries, used by the chain compressor. */
 #define LZ4_HASH_BITS 13
 #define LZ4_HASH_SIZE (1 << LZ4_HASH_BITS)
+
+/* Fast-path (chain=1) hash table: 12-bit, int[4096] = 16 KB.
+   Stores full 32-bit positions; no position-recovery overhead. */
+#define LZ4_HASH_BITS_FAST 12
+#define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
+#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(int))
 
 typedef struct {
     int head[LZ4_HASH_SIZE];
@@ -47,6 +53,14 @@ int lz4_compress_block(lz4_stream_t *s,
 /* Stateless single-block compress (allocates, inits, compresses, frees). */
 int lz4_compress(const uint8_t *src, uint8_t *dst,
                  int src_len, int max_chain);
+
+/*
+ * chain=1 fast-path: uses a caller-provided int[LZ4_HASH_SIZE_FAST] table
+ * (16 KB), storing full 32-bit positions.  Table must be filled with -1
+ * before the first call; it need not be reset between independent blocks.
+ */
+int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
+                      int src_len, int *htab);
 
 /* ── Standard LZ4 frame format ─────────────────────────────────────────── */
 
