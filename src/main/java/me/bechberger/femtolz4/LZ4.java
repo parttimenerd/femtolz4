@@ -1,5 +1,8 @@
 package me.bechberger.femtolz4;
 
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
@@ -16,10 +19,11 @@ public final class LZ4 {
     private static final int HASH_BITS   = 16;
     private static final int HASH_SIZE   = 1 << HASH_BITS;
     private static final int MIN_MATCH   = 4;
-    // minimum lookahead so hash4 (reads 5 bytes) stays in bounds
-    private static final int MIN_LOOKAHEAD = MIN_MATCH + 1 + 2; // 7
     private static final int PADDING     = 5;
     private static final int NIL         = Integer.MIN_VALUE;
+
+    private static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
+    private static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
     /** Worst-case output size for {@code srcLen} uncompressed bytes. */
     public static int maxCompressedLength(int srcLen) {
@@ -48,11 +52,15 @@ public final class LZ4 {
             int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
             if (n > 0) return n;
         }
+        return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+    }
 
-        int[] head = new int[HASH_SIZE];
+    private static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
+                                        byte[] dst, int dstOff, int maxChain) {        int[] head = new int[HASH_SIZE];
         int[] tail = new int[WINDOW_SIZE];
         Arrays.fill(head, NIL);
-        Arrays.fill(tail, NIL);
+        // tail needs no fill: chain walks start from head[h] which is NIL until
+        // insert() is called, so uninitialized tail slots are never reached.
 
         int op       = dstOff;
         int litStart = srcOff;
@@ -63,7 +71,7 @@ public final class LZ4 {
             int matchLen  = 0;
             int matchDist = 0;
 
-            if (pos <= safeEnd - (MIN_LOOKAHEAD - PADDING)) {
+            if (pos <= safeEnd - 2) {  // need 2 bytes slack for hash5's 5th byte
                 int maxMatch  = safeEnd - pos;
                 int limit     = pos - WINDOW_SIZE;
                 int chainLeft = maxChain;
@@ -115,6 +123,13 @@ public final class LZ4 {
         return Arrays.copyOf(dst, len);
     }
 
+    /** Pure-Java compress, bypassing the native path. For benchmarking. */
+    static byte[] compressJava(byte[] src) {
+        byte[] dst = new byte[maxCompressedLength(src.length)];
+        int len = compressJavaImpl(src, 0, src.length, dst, 0, 1);
+        return Arrays.copyOf(dst, len);
+    }
+
     // ── Decompress ────────────────────────────────────────────────────────────
 
     /**
@@ -133,6 +148,11 @@ public final class LZ4 {
             if (n >= 0) return n;
             throw new LZ4Exception("native LZ4 decompress failed (error " + n + ")");
         }
+        return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen);
+    }
+
+    private static int decompressJavaImpl(byte[] src, int srcOff, int srcLen,
+                                          byte[] dst, int dstOff, int dstLen) {
         int ip     = srcOff;
         int srcEnd = srcOff + srcLen;
         int op     = dstOff;
@@ -190,30 +210,27 @@ public final class LZ4 {
         return n == decompressedSize ? dst : Arrays.copyOf(dst, n);
     }
 
+    /** Pure-Java decompress, bypassing the native path. For benchmarking. */
+    static byte[] decompressJava(byte[] src, int decompressedSize) {
+        byte[] dst = new byte[decompressedSize];
+        int n = decompressJavaImpl(src, 0, src.length, dst, 0, decompressedSize);
+        return n == decompressedSize ? dst : Arrays.copyOf(dst, n);
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /** 5-byte multiply-shift hash (matches lz4.c). */
     static int hash5(byte[] b, int p) {
-        int v = get4(b, p) ^ ((b[p + 4] & 0xFF) << 24);
+        int v = (int) INT_LE.get(b, p) ^ ((b[p + 4] & 0xFF) << 24);
         return (v * 0x9E3779B9) >>> (32 - HASH_BITS);
     }
 
     static int get4(byte[] b, int p) {
-        return (b[p] & 0xFF)
-             | ((b[p + 1] & 0xFF) <<  8)
-             | ((b[p + 2] & 0xFF) << 16)
-             | ((b[p + 3] & 0xFF) << 24);
+        return (int) INT_LE.get(b, p);
     }
 
     private static long getLong(byte[] b, int p) {
-        return  (b[p    ] & 0xFFL)
-             | ((b[p + 1] & 0xFFL) <<  8)
-             | ((b[p + 2] & 0xFFL) << 16)
-             | ((b[p + 3] & 0xFFL) << 24)
-             | ((b[p + 4] & 0xFFL) << 32)
-             | ((b[p + 5] & 0xFFL) << 40)
-             | ((b[p + 6] & 0xFFL) << 48)
-             | ((b[p + 7] & 0xFFL) << 56);
+        return (long) LONG_LE.get(b, p);
     }
 
     private static void insert(int[] head, int[] tail, byte[] src, int pos) {

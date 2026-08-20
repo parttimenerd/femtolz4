@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: me.bechberger.femtolz4.LZ4Test
 -------------------------------------------------------------------------------
-Tests run: 43, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.336 s -- in me.bechberger.femtolz4.LZ4Test
+Tests run: 43, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.346 s -- in me.bechberger.femtolz4.LZ4Test

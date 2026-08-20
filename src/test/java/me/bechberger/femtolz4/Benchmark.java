@@ -50,16 +50,12 @@ public class Benchmark {
         public byte[] decompress(byte[] c, int n) { return LZ4.decompress(c, n); }
     };
 
-    // ── femtolz4 pure-Java (inline reimplementation without native dispatch) ──
+    // ── femtolz4 pure-Java (direct call, no native dispatch) ──────────────────
 
     static final Impl FEMTO_JAVA = new Impl() {
         public String name() { return "femto-java"; }
-        public byte[] compress(byte[] src) {
-            byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
-            int n = javaCompress(src, dst);
-            return Arrays.copyOf(dst, n);
-        }
-        public byte[] decompress(byte[] comp, int len) { return javaDecompress(comp, len); }
+        public byte[] compress(byte[] s) { return LZ4.compressJava(s); }
+        public byte[] decompress(byte[] c, int n) { return LZ4.decompressJava(c, n); }
     };
 
     // ── at.yawk lz4-java (net.jpountz package) – native ──────────────────────
