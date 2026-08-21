@@ -15,8 +15,11 @@
 #include <string.h>
 #include <stdint.h>
 
-#define BLOCK_SIZE (256 * 1024)
 #include "lz4_src.c"
+
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE (256 * 1024)
+#endif
 
 /* Inline decompressor — avoids JNI dependency. */
 static int femto_decompress_local(const uint8_t *src, int src_len,

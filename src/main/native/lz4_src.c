@@ -108,7 +108,8 @@ static uint32_t lz4__hash4(const uint8_t *p)
     return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
 }
 
-/* Push position into the hash chain for src[pos]. */
+/* Push position into the hash chain for src[pos].
+   Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash). */
 static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
     uint32_t h             = lz4__hash(src + pos);
@@ -124,7 +125,10 @@ static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
                             int pos, int src_len, int *out_dist)
 {
     int max_match = (src_len - PADDING_LITERALS) - pos;
-    if (max_match < MIN_MATCH) { s->head[lz4__hash(src + pos)] = pos; return 0; }
+    if (max_match < MIN_MATCH) {
+        if (pos + 5 <= src_len) s->head[lz4__hash(src + pos)] = pos;
+        return 0;
+    }
 
     int      limit = MAX(pos - WINDOW_SIZE, NIL);
     uint32_t h     = lz4__hash(src + pos);
@@ -193,7 +197,10 @@ static int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
                                   int *out_dist)
 {
     int max_match = (src_len - PADDING_LITERALS) - pos;
-    if (max_match < MIN_MATCH) { lz4__insert(s, src, pos); return 0; }
+    if (max_match < MIN_MATCH) {
+        if (pos + 5 <= src_len) lz4__insert(s, src, pos);
+        return 0;
+    }
 
     int      limit     = MAX(pos - WINDOW_SIZE, NIL);
     int      chain_len = max_chain;
@@ -415,8 +422,7 @@ static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
 
 void lz4_init(lz4_stream_t *s)
 {
-    /* tail is always written before it is read, so only head needs clearing. */
-    memset(s->head, 0xff, sizeof(s->head));
+    memset(s, 0xff, sizeof(*s));
 }
 
 /*
@@ -521,9 +527,9 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             int match_extra = match_len - MIN_MATCH;
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
 #ifdef LZ4_LITTLE_ENDIAN
-            *(uint16_t *)(dst + op) = (uint16_t)match_dist;
+            { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
 #else
-            *(uint16_t *)(dst + op) = SWAP16((uint16_t)match_dist);
+            { uint16_t off16 = SWAP16((uint16_t)match_dist); memcpy(dst + op, &off16, 2); }
 #endif
             op += 2;
             lz4__emit_match_overflow(dst, &op, match_extra);
@@ -532,9 +538,18 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             for (int i = pos + 1; i < lit_start; i += 2)
                 if (i <= safe_end - 2) htab[lz4__hash4(src + i)] = i;
             pos = lit_start;
+            /* prefetch source and hash table slot for next position */
+            if (pos <= safe_end - 2) {
+                __builtin_prefetch(src + pos + 64, 0, 0);
+                __builtin_prefetch(htab + lz4__hash4(src + pos), 0, 1);
+            }
         } else {
-            pos += (skip >> 6) + 1;
-            if (pos > src_len) pos = src_len;
+            int step = (skip >> 6) + 1;
+            int next = pos + step;
+            if (next > src_len) next = src_len;
+            if (next <= safe_end - 2)
+                __builtin_prefetch(htab + lz4__hash4(src + next), 0, 1);
+            pos  = next;
             if (skip < (17 << 6)) skip++;
         }
     }
@@ -582,9 +597,9 @@ int lz4_compress_block(lz4_stream_t *s,
 
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
 #ifdef LZ4_LITTLE_ENDIAN
-            *(uint16_t *)(dst + op) = (uint16_t)match_dist;
+            { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
 #else
-            *(uint16_t *)(dst + op) = SWAP16((uint16_t)match_dist);
+            { uint16_t off16 = SWAP16((uint16_t)match_dist); memcpy(dst + op, &off16, 2); }
 #endif
             op += 2;
             lz4__emit_match_overflow(dst, &op, match_extra);
