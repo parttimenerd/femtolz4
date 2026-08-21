@@ -92,8 +92,17 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         if (ms < dst_off)                          return -7;
         if ((int64_t)op + match_len > (int64_t)dst_end) return -8;
         if (offset >= match_len) {
-            /* No overlap: bulk copy. */
-            memcpy(dst + op, dst + ms, (size_t)match_len);
+            /* No overlap: bulk copy. Use __builtin_memcpy for small sizes so
+               the compiler emits inline AVX stores instead of calling glibc's
+               memmove-checking memcpy (which falls back to SSE2 for small sizes). */
+            if (match_len <= 16) {
+                __builtin_memcpy(dst + op, dst + ms, (size_t)match_len);
+            } else if (match_len <= 32) {
+                __builtin_memcpy(dst + op,      dst + ms,      16);
+                __builtin_memcpy(dst + op + 16, dst + ms + 16, (size_t)match_len - 16);
+            } else {
+                memcpy(dst + op, dst + ms, (size_t)match_len);
+            }
         } else if (offset == 1) {
             /* Run of one repeated byte: fill is fastest. */
             memset(dst + op, dst[ms], (size_t)match_len);
@@ -164,7 +173,12 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
 {
     (void)cls;
     jbyte *src = (*env)->GetPrimitiveArrayCritical(env, jSrc, NULL);
+    if (!src) return 0;
     jbyte *dst = (*env)->GetPrimitiveArrayCritical(env, jDst, NULL);
+    if (!dst) {
+        (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
+        return 0;
+    }
     int result;
     if (max_chain == 1) {
         uint32_t *htab = get_htab();
@@ -195,7 +209,12 @@ Java_me_bechberger_femtolz4_NativeLZ4_decompress(JNIEnv *env, jclass cls,
 {
     (void)cls;
     jbyte *src = (*env)->GetPrimitiveArrayCritical(env, jSrc, NULL);
+    if (!src) return -1;
     jbyte *dst = (*env)->GetPrimitiveArrayCritical(env, jDst, NULL);
+    if (!dst) {
+        (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
+        return -1;
+    }
     int result = femto_decompress((const uint8_t *)src, src_off, src_len,
                                   (uint8_t *)dst,       dst_off, dst_len);
     (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);

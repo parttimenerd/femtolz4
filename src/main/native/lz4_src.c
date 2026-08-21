@@ -73,6 +73,9 @@ FORCE_INLINE void lz4__emit_literals(uint8_t *dst, int *op,
         } else if (lit_len <= 32) {
             __builtin_memcpy(dst + *op, src + lit_start, 16);
             __builtin_memcpy(dst + *op + 16, src + lit_start + 16, lit_len - 16);
+        } else if (lit_len <= 64) {
+            __builtin_memcpy(dst + *op,      src + lit_start,      32);
+            __builtin_memcpy(dst + *op + 32, src + lit_start + 32, lit_len - 32);
         } else {
             memcpy(dst + *op, src + lit_start, lit_len);
         }
