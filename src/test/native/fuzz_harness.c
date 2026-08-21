@@ -72,9 +72,10 @@ static int run_roundtrip(const uint8_t *src, int src_len, int max_chain, const c
 
     int comp_len;
     if (max_chain == 1) {
-        uint32_t *htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
+        uint64_t *htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
         if (!htab) { free(comp); free(decomp); return -99; }
-        comp_len = lz4_compress_fast(src, comp, src_len, htab, 1);
+        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        comp_len = lz4_compress_fast(src, comp, src_len, htab);
         free(htab);
     } else {
         lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
@@ -174,8 +175,9 @@ int main(void) {
     /* ── Truncated valid compressed data (exhaustive: every offset) ── */
     fill_random(buf, 1024, &seed);
     {
-        uint32_t *htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
-        int clen = lz4_compress_fast(buf, buf2, 1024, htab, 1);
+        uint64_t *htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        int clen = lz4_compress_fast(buf, buf2, 1024, htab);
         free(htab);
         for (int trunc = 0; trunc < clen; trunc++) {
             char label[80];

@@ -20,14 +20,13 @@
 #define LZ4_HASH_BITS 13
 #define LZ4_HASH_SIZE (1 << LZ4_HASH_BITS)
 
-/* Fast-path (chain=1) hash table: 12-bit, uint32_t[4096] = 16 KB.
-   Each slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
-   Valid iff (slot >> 16) == gen.  Position recovered as:
-     sv = (pos & ~0xFFFF) | (slot & 0xFFFF); if (sv >= pos) sv -= 0x10000.
-   Generation counter avoids memset on every call. */
-#define LZ4_HASH_BITS_FAST 12
+/* Fast-path (chain=1) hash table: 13-bit, uint64_t[8192] = 64 KB.
+   Each slot stores: bits[63:32] = 4-byte value at position, bits[31:0] = position.
+   Negative position (high bit set) = empty.  Reset with 0x80 sentinel.
+   Storing the 4-byte value alongside pos avoids a cold src[sv] load on each probe. */
+#define LZ4_HASH_BITS_FAST 13
 #define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
-#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint32_t))
+#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint64_t))
 
 typedef struct {
     int head[LZ4_HASH_SIZE];
@@ -55,7 +54,7 @@ int lz4_compress(const uint8_t *src, uint8_t *dst,
  * first call; it need not be reset between independent blocks.
  */
 int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
-                      int src_len, uint32_t *htab, uint16_t gen);
+                      int src_len, uint64_t *htab);
 
 /* ── Standard LZ4 frame format ─────────────────────────────────────────── */
 

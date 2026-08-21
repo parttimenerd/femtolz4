@@ -30,14 +30,17 @@ public final class LZ4 {
     private static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
     /*
-     * Generation-tagged hash table for compressFast — avoids Arrays.fill per call.
-     * Each int slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
-     * A slot is valid iff (slot >>> 16) == currentGen.  Generation wraps at 65536.
-     * The stored position is recovered as: sv = (pos & ~0xFFFF) | (slot & 0xFFFF);
-     *                                       if (sv >= pos) sv -= 0x10000;
+     * Fast-path hash table: long[8192] storing packed (value<<32|pos).
+     * bits[63:32] = 4-byte src value at pos, bits[31:0] = position as signed int.
+     * Sentinel: 0x8080808080808080L — negative position (high bit of low word set) = empty.
+     * Reset with FAST_SENTINEL fill before each block.
      */
-    private static final ThreadLocal<int[]> TL_FAST_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE_FAST]);
-    private static final ThreadLocal<int[]> TL_FAST_GEN  = ThreadLocal.withInitial(() -> new int[]{0});
+    private static final long FAST_SENTINEL = 0x8080808080808080L;
+    private static final ThreadLocal<long[]> TL_FAST_HEAD = ThreadLocal.withInitial(() -> {
+        long[] t = new long[HASH_SIZE_FAST];
+        Arrays.fill(t, FAST_SENTINEL);
+        return t;
+    });
 
     /* Reusable compress output buffer — avoids allocation on every call. */
     private static final ThreadLocal<byte[]> TL_DST = ThreadLocal.withInitial(() -> new byte[0]);
@@ -63,7 +66,11 @@ public final class LZ4 {
      * <p>Uses the native lz4 library when available (ignores {@code maxChain}),
      * otherwise falls back to the pure-Java implementation.
      *
-     * @param maxChain hash-chain depth for pure-Java path: 1 = fastest, ≥64 = better ratio
+        * <p>{@code maxChain} is the pure-Java compressor's search-effort limit: it caps
+        * how many previous candidate matches are inspected for each input position.
+        * Lower values are faster, higher values usually compress better.
+        *
+        * @param maxChain hash-chain depth for pure-Java path: 1 = fastest, ≥64 = better ratio
      * @return number of bytes written into dst
      */
     public static int compress(byte[] src, int srcOff, int srcLen,
@@ -76,40 +83,131 @@ public final class LZ4 {
         return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
     }
 
+    /*
+     * Chain compressor (maxChain >= 2).
+     *
+     * head[h]  = int position of most-recent entry at hash h (NIL = empty)
+     * tail[pos & WINDOW_MASK] = long packed as (value<<32)|nextPos
+     *   bits[63:32] = 4-byte src value at nextPos (avoids cold src[sv] load)
+     *   bits[31:0]  = nextPos as signed int (NIL sentinel when head[h]=NIL)
+     *
+     * On every chain walk step we only load tail[sv & MASK] — one 64-bit
+     * L2-resident read — instead of also loading src[sv] (random L3 miss).
+     */
     private static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff, int maxChain) {
         if (maxChain == 1) {
             return compressFast(src, srcOff, srcLen, dst, dstOff);
         }
+        if (srcLen == 0) return 0;
 
         int[] head = new int[HASH_SIZE];
-        int[] tail = new int[WINDOW_SIZE];
+        long[] tail = new long[WINDOW_SIZE];  // bits[63:32]=value, bits[31:0]=pos
         Arrays.fill(head, NIL);
-        // tail needs no fill: chain walks start from head[h] which is NIL until
-        // insert() is called, so uninitialized tail slots are never reached.
+        // tail uninitialized: only reached from valid head[] entries
 
         int op       = dstOff;
         int litStart = srcOff;
         int pos      = srcOff;
         int srcEnd   = srcOff + srcLen;
-        int safeEnd  = srcEnd - PADDING; // last position where we can hash safely
+        int safeEnd  = srcEnd - PADDING;
 
         while (pos < srcEnd) {
             int matchLen  = 0;
             int matchDist = 0;
 
-            if (pos <= safeEnd - 2) {  // need 2 bytes slack for hash5's 5th byte
-                long r = insertAndMatch(head, tail, src, pos, safeEnd - pos, maxChain);
-                matchLen  = (int) (r >>> 32);
-                matchDist = (int) r;
+            if (pos <= safeEnd - 2) {
+                int v    = (int) INT_LE.get(src, pos) ^ ((src[pos + 4] & 0xFF) << 24);
+                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int pos4 = (int) INT_LE.get(src, pos);
+                int limit     = pos - WINDOW_SIZE;
+                int chainLeft = maxChain;
+                int bestLen   = 0;
+                int bestDist  = 0;
+
+                // Insert pos first
+                int prev = head[h];
+                tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
+                head[h] = pos;
+
+                // Walk from second entry
+                for (int sv = prev; sv > limit; ) {
+                    long tslot = tail[sv & WINDOW_MASK];
+                    int  sv4   = (int)(tslot >>> 32);
+                    int  next  = (int) tslot;
+
+                    if (sv4 != pos4
+                            || src[sv + bestLen] != src[pos + bestLen]) {
+                        if (--chainLeft == 0) break;
+                        sv = next;
+                        if (sv <= limit) break;
+                        continue;
+                    }
+                    int maxMatch = safeEnd - pos;
+                    int len = MIN_MATCH;
+                    while (len + 8 <= maxMatch) {
+                        long diff = (long) LONG_LE.get(src, sv + len)
+                                  ^ (long) LONG_LE.get(src, pos + len);
+                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                        len += 8;
+                    }
+                    while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
+                    if (len > bestLen) {
+                        bestLen = len; bestDist = pos - sv;
+                        if (len == maxMatch) break;
+                    }
+                    if (--chainLeft == 0) break;
+                    sv = next;
+                    if (sv <= limit) break;
+                }
+                matchLen  = bestLen;
+                matchDist = bestDist;
             }
 
-            // Lazy matching: only at maxChain>1 (ratio mode).
+            // Lazy matching
             if (matchLen >= MIN_MATCH && pos <= safeEnd - 3) {
-                int lazyPos = pos + 1;
-                long r = insertAndMatch(head, tail, src, lazyPos, safeEnd - lazyPos, maxChain);
-                int lazyLen  = (int) (r >>> 32);
-                int lazyDist = (int) r;
+                int lp   = pos + 1;
+                int v    = (int) INT_LE.get(src, lp) ^ ((src[lp + 4] & 0xFF) << 24);
+                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int lp4  = (int) INT_LE.get(src, lp);
+                int limit     = lp - WINDOW_SIZE;
+                int chainLeft = maxChain;
+                int lazyLen   = 0;
+                int lazyDist  = 0;
+
+                int prev = head[h];
+                tail[lp & WINDOW_MASK] = ((long) lp4 << 32) | (prev & 0xFFFFFFFFL);
+                head[h] = lp;
+
+                for (int sv = prev; sv > limit; ) {
+                    long tslot = tail[sv & WINDOW_MASK];
+                    int  sv4   = (int)(tslot >>> 32);
+                    int  next  = (int) tslot;
+
+                    if (sv4 != lp4
+                            || src[sv + lazyLen] != src[lp + lazyLen]) {
+                        if (--chainLeft == 0) break;
+                        sv = next;
+                        if (sv <= limit) break;
+                        continue;
+                    }
+                    int maxMatch = safeEnd - lp;
+                    int len = MIN_MATCH;
+                    while (len + 8 <= maxMatch) {
+                        long diff = (long) LONG_LE.get(src, sv + len)
+                                  ^ (long) LONG_LE.get(src, lp + len);
+                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                        len += 8;
+                    }
+                    while (len < maxMatch && src[sv + len] == src[lp + len]) len++;
+                    if (len > lazyLen) {
+                        lazyLen = len; lazyDist = lp - sv;
+                        if (len == maxMatch) break;
+                    }
+                    if (--chainLeft == 0) break;
+                    sv = next;
+                    if (sv <= limit) break;
+                }
                 if (lazyLen > matchLen) {
                     pos++;
                     matchLen  = lazyLen;
@@ -122,111 +220,97 @@ public final class LZ4 {
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
-                int insertFrom = pos + 1;
-                int insertEnd  = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
-                while (insertFrom < insertEnd) { insert(head, tail, src, insertFrom); insertFrom++; }
+                // Insert skipped positions (stride=1 for chain>1)
+                int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
+                for (int ip = pos + 1; ip < insertEnd; ip++) {
+                    int v2 = (int) INT_LE.get(src, ip) ^ ((src[ip + 4] & 0xFF) << 24);
+                    int h2 = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
+                    int ip4 = (int) INT_LE.get(src, ip);
+                    int prev2 = head[h2];
+                    tail[ip & WINDOW_MASK] = ((long) ip4 << 32) | (prev2 & 0xFFFFFFFFL);
+                    head[h2] = ip;
+                }
                 pos = litStart;
             } else {
                 pos++;
             }
         }
 
-        // final literal run — no match follows
         int litLen = srcEnd - litStart;
-        if (litLen > 0) {
-            op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
-        }
+        if (litLen > 0) op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
         return op - dstOff;
     }
 
     /**
-     * chain=1 fast path using a thread-local int[] hash table.
-     * Each slot encodes (gen<<16)|(pos&0xFFFF); no fill needed between calls.
-     * extend() and emitSequence() common-case are inlined to stay within JIT
-     * inlining budget.
+     * chain=1 fast path using a thread-local long[] hash table.
+     * Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position (signed).
+     * Sentinel 0x8080808080808080L = empty (negative position).
+     * Table is filled with sentinel before each call.
      */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
-        int[] head  = TL_FAST_HEAD.get();
-        int[] genBox = TL_FAST_GEN.get();
-        int gen = (genBox[0] + 1) & 0xFFFF;
-        genBox[0] = gen;
-        int genTag = gen << 16;   // bits[31:16] of a valid slot
+        if (srcLen == 0) return 0;
+        long[] head = TL_FAST_HEAD.get();
+        Arrays.fill(head, FAST_SENTINEL);
 
         int op       = dstOff;
         int litStart = srcOff;
         int pos      = srcOff;
         int srcEnd   = srcOff + srcLen;
         int safeEnd  = srcEnd - PADDING;
-        int safeEnd2 = safeEnd - 2;
-        int skip     = 1;
+        int safeEnd2 = safeEnd - 1;
 
-        while (pos < srcEnd) {
-            int matchLen  = 0;
-            int matchDist = 0;
+        if (pos < safeEnd2) {
+            int v4 = (int) INT_LE.get(src, pos);
+            int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-            if (pos <= safeEnd2) {
-                int limit = pos - WINDOW_SIZE;
-                /* 4-byte multiply-shift hash using var handle (little-endian, unaligned). */
-                int v4 = (int) INT_LE.get(src, pos);
-                int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+            while (pos < safeEnd2) {
+                long slot = head[h];
+                head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
-                int slot = head[h];
-                /* Write new slot: genTag | low16(pos) */
-                head[h] = genTag | (pos & 0xFFFF);
+                int sv = (int) slot;
+                if (sv > pos - WINDOW_SIZE && (int)(slot >>> 32) == v4) {
+                    int maxMatch = safeEnd - pos;
+                    int len = MIN_MATCH;
+                    while (len + 8 <= maxMatch) {
+                        long diff = (long) LONG_LE.get(src, sv + len) ^ (long) LONG_LE.get(src, pos + len);
+                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                        len += 8;
+                    }
+                    while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
 
-                /* Slot valid iff generation tag matches. */
-                if ((slot >>> 16) == gen) {
-                    int sv = (pos & ~0xFFFF) | (slot & 0xFFFF);
-                    if (sv >= pos) sv -= 0x10000;
-                    if (sv >= 0 && sv > limit) {
-                        int sv4 = (int) INT_LE.get(src, sv);
-                        if (sv4 == v4) {
-                            /* Inlined extend(). */
-                            int maxMatch = safeEnd - pos;
-                            int len = MIN_MATCH;
-                            while (len + 8 <= maxMatch) {
-                                long svL  = (long) LONG_LE.get(src, sv  + len);
-                                long posL = (long) LONG_LE.get(src, pos + len);
-                                long diff = svL ^ posL;
-                                if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
-                                len += 8;
-                            }
-                            while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
-                            matchLen  = len;
-                            matchDist = pos - sv;
+                    if (len >= MIN_MATCH) {
+                        int litLen     = pos - litStart;
+                        int matchExtra = len - MIN_MATCH;
+                        int matchDist  = pos - sv;
+                        dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
+                                           | (matchExtra < 15 ? matchExtra : 15));
+                        if (litLen >= 15) {
+                            int rem = litLen - 15;
+                            while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
+                            dst[op++] = (byte) rem;
                         }
+                        if (litLen > 0) { System.arraycopy(src, litStart, dst, op, litLen); op += litLen; }
+                        dst[op++] = (byte) matchDist;
+                        dst[op++] = (byte) (matchDist >>> 8);
+                        if (matchExtra >= 15) {
+                            int rem = matchExtra - 15;
+                            while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
+                            dst[op++] = (byte) rem;
+                        }
+                        litStart = pos + len;
+                        pos = litStart;
+                        if (pos >= safeEnd2) break;
+                        v4 = (int) INT_LE.get(src, pos);
+                        h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                        continue;
                     }
                 }
-            }
 
-            if (matchLen >= MIN_MATCH) {
-                skip = 1;
-                /* Inlined emitSequence() — common case (litLen<15, matchExtra<15). */
-                int litLen     = pos - litStart;
-                int matchExtra = matchLen - MIN_MATCH;
-                dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
-                                   | (matchExtra < 15 ? matchExtra : 15));
-                if (litLen >= 15) {
-                    int rem = litLen - 15;
-                    while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
-                    dst[op++] = (byte) rem;
-                }
-                if (litLen > 0) { System.arraycopy(src, litStart, dst, op, litLen); op += litLen; }
-                dst[op++] = (byte) matchDist;
-                dst[op++] = (byte) (matchDist >>> 8);
-                if (matchExtra >= 15) {
-                    int rem = matchExtra - 15;
-                    while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
-                    dst[op++] = (byte) rem;
-                }
-                litStart = pos + matchLen;
-                pos      = litStart;
-            } else {
-                int step = (skip >> 6) + 1;
-                pos += step;
-                if (pos > srcEnd) pos = srcEnd;
-                if (skip < (17 << 6)) skip++;
+                pos++;
+                if (pos >= safeEnd2) { pos = srcEnd; break; }
+                v4 = (int) INT_LE.get(src, pos);
+                h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
             }
         }
 
@@ -291,11 +375,23 @@ public final class LZ4 {
             if (n >= 0) return n;
             // Native signalled an error — fall through to pure-Java for correct diagnosis.
         }
-        return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen);
+        return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen, dstOff);
     }
 
     private static int decompressJavaImpl(byte[] src, int srcOff, int srcLen,
                                           byte[] dst, int dstOff, int dstLen) {
+        return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen, dstOff);
+    }
+
+    static int decompressJavaWithMatchLowerBound(byte[] src, int srcOff, int srcLen,
+                                                 byte[] dst, int dstOff, int dstLen,
+                                                 int matchLowerBound) {
+        return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen, matchLowerBound);
+    }
+
+    private static int decompressJavaImpl(byte[] src, int srcOff, int srcLen,
+                                          byte[] dst, int dstOff, int dstLen,
+                                          int matchLowerBound) {
         int ip     = srcOff;
         int srcEnd = srcOff + srcLen;
         int op     = dstOff;
@@ -342,7 +438,7 @@ public final class LZ4 {
             }
 
             int matchSrc = op - offset;
-            if (matchSrc < dstOff) throw new LZ4Exception("match before buffer start");
+            if (matchSrc < matchLowerBound) throw new LZ4Exception("match before buffer start");
             if ((long) op + matchLen > dstEnd) throw new LZ4Exception("output overflow in match");
             copyMatch(dst, matchSrc, op, (int) matchLen);
             op += (int) matchLen;
@@ -369,64 +465,6 @@ public final class LZ4 {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
-
-    /** 5-byte multiply-shift hash (matches lz4.c). */
-    static int hash5(byte[] b, int p) {
-        int v = (int) INT_LE.get(b, p) ^ ((b[p + 4] & 0xFF) << 24);
-        return (v * 0x9E3779B9) >>> (32 - HASH_BITS);
-    }
-
-    private static void insert(int[] head, int[] tail, byte[] src, int pos) {
-        int h = hash5(src, pos);
-        tail[pos & WINDOW_MASK] = head[h];
-        head[h] = pos;
-    }
-
-    /**
-     * Insert {@code position} into the hash chain and find its best match in
-     * one pass (single hash computation). Mirrors the native
-     * {@code lz4__insert_and_match} helper.
-     *
-     * @return {@code (matchLen << 32) | (matchDist & 0xFFFFFFFFL)}; matchLen is 0 if no match found
-     */
-    private static long insertAndMatch(int[] head, int[] tail, byte[] src,
-                                        int position, int maxMatch, int maxChain) {
-        int limit     = position - WINDOW_SIZE;
-        int chainLeft = maxChain;
-        int h         = hash5(src, position);
-        // Insert position first so we walk from the second chain entry (single hash).
-        tail[position & WINDOW_MASK] = head[h];
-        head[h] = position;
-
-        int bestLen  = 0;
-        int bestDist = 0;
-        for (int sv = tail[position & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
-            if (INT_LE.get(src, sv) != INT_LE.get(src, position)
-                    || src[sv + bestLen] != src[position + bestLen]) {
-                if (--chainLeft == 0) break;
-                continue;
-            }
-            int len = extend(src, sv, position, maxMatch);
-            if (len > bestLen) {
-                bestLen  = len;
-                bestDist = position - sv;
-                if (len == maxMatch) break;
-            }
-            if (--chainLeft == 0) break;
-        }
-        return ((long) bestLen << 32) | (bestDist & 0xFFFFFFFFL);
-    }
-
-    private static int extend(byte[] src, int sv, int pos, int maxMatch) {
-        int len = MIN_MATCH;
-        while (len + 8 <= maxMatch) {
-            long diff = (long) LONG_LE.get(src, sv + len) ^ (long) LONG_LE.get(src, pos + len);
-            if (diff != 0) return len + (Long.numberOfTrailingZeros(diff) >>> 3);
-            len += 8;
-        }
-        while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
-        return len;
-    }
 
     private static int emitSequence(byte[] src, int litStart, int litLen,
                                     int matchExtra, int matchDist,

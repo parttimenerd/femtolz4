@@ -108,6 +108,12 @@ FORCE_INLINE uint32_t lz4__hash4(const uint8_t *p)
     return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
 }
 
+/* Compute hash directly from an already-loaded uint32_t value. */
+FORCE_INLINE uint32_t lz4__hash4v(uint32_t v)
+{
+    return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
+}
+
 /* Push position into the hash chain for src[pos].
    Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash). */
 FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
@@ -258,80 +264,69 @@ void lz4_init(lz4_stream_t *s)
 }
 
 /*
- * Chain=1 fast-path using a uint32_t[LZ4_HASH_SIZE_FAST] generation-tagged table.
- * Each slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
- * Valid iff (slot >> 16) == gen.  Position recovered as:
- *   sv = (pos & ~0xFFFF) | (slot & 0xFFFF); if (sv >= pos) sv -= 0x10000.
- * Caller increments gen each call — no memset needed.
+ * Chain=1 fast-path using a uint64_t[LZ4_HASH_SIZE_FAST] table.
+ * Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position (int32).
+ * Negative position (high bit set in low 32) = empty (sentinel 0x80808080...).
+ * Storing the 4-byte value alongside pos avoids the cold src[sv] load on probe.
+ * Table must be reset to 0x80 bytes before each call.
  */
+#if defined(__x86_64__) || defined(_M_X64)
+__attribute__((target("avx2")))
+#endif
 HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
-                      int src_len, uint32_t *htab, uint16_t gen)
+                      int src_len, uint64_t *htab)
 {
+    if (src_len == 0) return 0;
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
-    int skip      = 1;
     int safe_end  = src_len - PADDING_LITERALS;
-    uint32_t gen_tag = (uint32_t)gen << 16;  /* bits[31:16] of a valid slot */
 
-    while (pos < src_len) {
-        int match_dist = 0;
-        int match_len  = 0;
+    uint32_t pos4;
+    memcpy(&pos4, src + pos, 4);
+    uint32_t h = lz4__hash4v(pos4);
 
-        if (pos <= safe_end - 2) {
+    while (pos < safe_end - 1) {
+        uint64_t slot = htab[h];
+        htab[h]       = ((uint64_t)pos4 << 32) | (uint32_t)pos;
+
+        int32_t sv = (int32_t)(uint32_t)slot;
+        if (sv > pos - (int)WINDOW_SIZE && (uint32_t)(slot >> 32) == pos4) {
             int max_match = safe_end - pos;
-            int limit     = pos - WINDOW_SIZE;
-            uint32_t h    = lz4__hash4(src + pos);
-            uint32_t pos4;
-            memcpy(&pos4, src + pos, 4);
+            int match_len  = lz4__extend_match(src, sv, pos, max_match);
+            int match_dist = pos - sv;
 
-            uint32_t slot = htab[h];
-            htab[h] = gen_tag | (uint32_t)(pos & 0xFFFF);
-
-            if ((slot >> 16) == gen) {
-                int sv = (pos & ~0xFFFF) | (int)(slot & 0xFFFF);
-                if (sv >= pos) sv -= 0x10000;
-                if (sv >= 0 && sv > limit) {
-                    uint32_t sv4;
-                    memcpy(&sv4, src + sv, 4);
-                    if (sv4 == pos4) {
-                        match_len  = lz4__extend_match(src, sv, pos, max_match);
-                        match_dist = pos - sv;
-                    }
-                }
+            if (match_len >= MIN_MATCH) {
+                int match_extra = match_len - MIN_MATCH;
+                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
+                { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
+                op += 2;
+                lz4__emit_match_overflow(dst, &op, match_extra);
+                lit_start = pos + match_len;
+                pos = lit_start;
+                if (__builtin_expect(pos >= safe_end - 1, 0)) break;
+                memcpy(&pos4, src + pos, 4);
+                h = lz4__hash4v(pos4);
+                __builtin_prefetch(htab + h, 0, 3);
+                continue;
             }
         }
 
-        if (match_len >= MIN_MATCH) {
-            skip = 1;
-            int match_extra = match_len - MIN_MATCH;
-            lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
-            { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
-            op += 2;
-            lz4__emit_match_overflow(dst, &op, match_extra);
-            lit_start = pos + match_len;
-            pos = lit_start;
-            /* prefetch source and hash table slot for next position */
-            if (pos <= safe_end - 2) {
-                __builtin_prefetch(src + pos + 64, 0, 0);
-                __builtin_prefetch(htab + lz4__hash4(src + pos), 0, 3);
-            }
-        } else {
-            int step = (skip >> 6) + 1;
-            int next = pos + step;
-            if (next > src_len) next = src_len;
-            if (next <= safe_end - 2)
-                __builtin_prefetch(htab + lz4__hash4(src + next), 0, 3);
-            pos  = next;
-            if (skip < (17 << 6)) skip++;
-        }
+        pos++;
+        if (__builtin_expect(pos >= safe_end - 1, 0)) { pos = src_len; break; }
+        memcpy(&pos4, src + pos, 4);
+        h = lz4__hash4v(pos4);
+        __builtin_prefetch(htab + h, 0, 3);
     }
 
-    if (lit_start != pos)
-        lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, 0);
+    if (lit_start != src_len)
+        lz4__emit_literals(dst, &op, src, lit_start, src_len - lit_start, 0);
     return op;
 }
 
+#if defined(__x86_64__) || defined(_M_X64)
+__attribute__((target("avx2")))
+#endif
 HOT int lz4_compress_block(lz4_stream_t *s,
                        const uint8_t *src, uint8_t *dst,
                        int src_len, int max_chain)

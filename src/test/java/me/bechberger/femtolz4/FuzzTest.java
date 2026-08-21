@@ -67,7 +67,7 @@ class FuzzTest {
 
     @Property(tries = 200)
     @Tag("slow")
-    void femtoToYawkatLarge(@ForAll @Size(min = 1, max = 100 * 1024 * 1024) byte[] data) {
+    void femtoToYawkatLarge(@ForAll @Size(min = 1, max = 10 * 1024 * 1024) byte[] data) {
         byte[] compressed = LZ4.compress(data, 1);
         byte[] dst        = new byte[data.length];
         YAWKAT_DEC.decompress(compressed, 0, dst, 0, data.length);

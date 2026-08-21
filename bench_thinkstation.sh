@@ -23,10 +23,12 @@ echo "=== Building JAR locally ==="
 JAR="$SCRIPT_DIR/target/femtolz4-0.1.0.jar"
 TEST_CLASSES="$SCRIPT_DIR/target/test-classes"
 
-YAWKAT_JAR="$(ls "$HOME/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/"*.jar 2>/dev/null | head -1 || true)"
-if [[ -z "$YAWKAT_JAR" ]]; then
+YAWKAT_JAR="$HOME/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/lz4-java-1.11.0.jar"
+if [[ ! -f "$YAWKAT_JAR" ]]; then
     (cd "$SCRIPT_DIR" && mvn dependency:resolve -q)
-    YAWKAT_JAR="$(ls "$HOME/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/"*.jar | head -1)"
+fi
+if [[ ! -f "$YAWKAT_JAR" ]]; then
+    echo "ERROR: lz4-java jar not found at $YAWKAT_JAR"; exit 1
 fi
 
 # ── Find JNI headers ─────────────────────────────────────────────────────────

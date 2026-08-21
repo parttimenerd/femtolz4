@@ -15,15 +15,18 @@
 
 /* ── Thread-local compress state ─────────────────────────────────────────── */
 
-/* chain=1 fast path: generation-tagged uint32_t table (16 KB).
-   No reset between calls — generation counter avoids memset. */
-static _Thread_local uint32_t *tl_htab = NULL;
-static _Thread_local uint16_t  tl_gen  = 0;
+/* chain=1 fast path: uint64_t[LZ4_HASH_SIZE_FAST] table (64 KB).
+   Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position.
+   Reset to sentinel 0x80 per call so stale entries never match across calls. */
+static _Thread_local uint64_t *tl_htab = NULL;
+static _Thread_local uint16_t  tl_gen  = 0;  /* unused, kept for ABI compat */
 
-static uint32_t *get_htab(void)
+static uint64_t *get_htab(void)
 {
     if (!tl_htab) {
-        tl_htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
+        tl_htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        if (tl_htab)
+            memset(tl_htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
     }
     return tl_htab;
 }
@@ -42,6 +45,15 @@ static lz4_stream_t *get_stream(void)
 
 #define D_MIN_MATCH 4
 
+/*
+ * Compile femto_decompress as AVX2 on x86-64 so the compiler never emits
+ * vzeroupper when transitioning between the inline YMM copies below and the
+ * surrounding scalar control flow.  On other architectures the attribute is
+ * a no-op.
+ */
+#if defined(__x86_64__) || defined(_M_X64)
+__attribute__((target("avx2")))
+#endif
 static int femto_decompress(const uint8_t *src, int src_off, int src_len,
                              uint8_t *dst,       int dst_off, int dst_len)
 {
@@ -68,8 +80,9 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         }
         if ((int64_t)op + lit_len > (int64_t)dst_end) return -2;
         if ((int64_t)ip + lit_len > (int64_t)src_end) return -3;
-        /* __builtin_memcpy for small literals: compiler emits inline SIMD stores,
-           avoiding the PLT call + vzeroupper transition penalty. */
+        /* __builtin_memcpy cascade: compiler emits inline YMM stores throughout,
+           no vzeroupper+PLT call.  Literal runs > 128 bytes are rare in typical
+           heap data, so the final memcpy is not on the hot path. */
         if (lit_len <= 16) {
             __builtin_memcpy(dst + op, src + ip, (size_t)lit_len);
         } else if (lit_len <= 32) {
@@ -78,6 +91,9 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         } else if (lit_len <= 64) {
             __builtin_memcpy(dst + op,      src + ip,      32);
             __builtin_memcpy(dst + op + 32, src + ip + 32, (size_t)lit_len - 32);
+        } else if (lit_len <= 128) {
+            __builtin_memcpy(dst + op,      src + ip,       64);
+            __builtin_memcpy(dst + op + 64, src + ip + 64, (size_t)lit_len - 64);
         } else {
             memcpy(dst + op, src + ip, (size_t)lit_len);
         }
@@ -104,8 +120,8 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         if (ms < dst_off)                          return -7;
         if ((int64_t)op + match_len > (int64_t)dst_end) return -8;
         if (offset >= match_len) {
-            /* No overlap: bulk copy. Use __builtin_memcpy for small sizes so
-               the compiler emits inline SIMD stores instead of a PLT call. */
+            /* No overlap: inline YMM copies up to 128 bytes; larger fall back
+               to memcpy (still within the avx2 target, so no vzeroupper). */
             if (match_len <= 16) {
                 __builtin_memcpy(dst + op, dst + ms, (size_t)match_len);
             } else if (match_len <= 32) {
@@ -114,6 +130,9 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
             } else if (match_len <= 64) {
                 __builtin_memcpy(dst + op,      dst + ms,      32);
                 __builtin_memcpy(dst + op + 32, dst + ms + 32, (size_t)match_len - 32);
+            } else if (match_len <= 128) {
+                __builtin_memcpy(dst + op,      dst + ms,       64);
+                __builtin_memcpy(dst + op + 64, dst + ms + 64, (size_t)match_len - 64);
             } else {
                 memcpy(dst + op, dst + ms, (size_t)match_len);
             }
@@ -195,12 +214,13 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     }
     int result;
     if (max_chain == 1) {
-        uint32_t *htab = get_htab();
+        uint64_t *htab = get_htab();
         if (!htab) { result = 0; goto done; }
+        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
         result = lz4_compress_fast(
                             (const uint8_t *)(src + src_off),
                             (uint8_t *)(dst + dst_off),
-                            src_len, htab, ++tl_gen);
+                            src_len, htab);
     } else {
         lz4_stream_t *s = get_stream();
         if (!s) { result = 0; goto done; }
