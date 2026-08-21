@@ -6,7 +6,8 @@ set -euo pipefail
 
 THINKSTATION=${THINKSTATION:-thinkstation}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REMOTE_DIR='$HOME/femtolz4'
+REMOTE_HOME="$(ssh "$THINKSTATION" 'echo $HOME')"
+REMOTE_DIR="${REMOTE_HOME}/femtolz4"
 
 # ── Local prereqs ─────────────────────────────────────────────────────────────
 if ! command -v mvn &>/dev/null; then echo "ERROR: mvn not found locally"; exit 1; fi
@@ -76,7 +77,7 @@ REMOTE_CHECK
 echo "=== Building native lib on ThinkStation ==="
 ssh "$THINKSTATION" bash <<REMOTE_BUILD
 set -e
-REMOTE_DIR="\$HOME/femtolz4"
+REMOTE_DIR="${REMOTE_DIR}"
 gcc -O3 -march=native -shared -fPIC \
     -I\${REMOTE_DIR}/jni-headers \
     -I\${REMOTE_DIR}/jni-headers/linux \
@@ -109,7 +110,7 @@ echo "=== Benchmark on ThinkStation ==="
 BENCH_FILES="$*"
 ssh "$THINKSTATION" bash <<REMOTE_BENCH
 set -e
-REMOTE_DIR="\$HOME/femtolz4"
+REMOTE_DIR="${REMOTE_DIR}"
 CP="\${REMOTE_DIR}/bench/test-classes:\${REMOTE_DIR}/bench/femtolz4.jar:\${REMOTE_DIR}/bench/lz4-java.jar"
 java --enable-native-access=ALL-UNNAMED -cp "\$CP" me.bechberger.femtolz4.Benchmark $BENCH_FILES
 REMOTE_BENCH
@@ -117,11 +118,11 @@ REMOTE_BENCH
 # ── Valgrind + ASAN harness ──────────────────────────────────────────────────
 echo ""
 echo "=== Valgrind + ASAN harness on ThinkStation ==="
-ssh "$THINKSTATION" bash <<'REMOTE_FUZZ'
+ssh "$THINKSTATION" bash <<REMOTE_FUZZ
 set -e
-REMOTE_DIR="$HOME/femtolz4"
+REMOTE_DIR="${REMOTE_DIR}"
 
-if [[ ! -f "${REMOTE_DIR}/native/fuzz_harness.c" ]]; then
+if [[ ! -f "\${REMOTE_DIR}/native/fuzz_harness.c" ]]; then
     echo "SKIP: fuzz_harness.c not found on ThinkStation"
     exit 0
 fi
@@ -133,19 +134,19 @@ fi
 
 echo "--- Building ASAN harness ---"
 gcc -g -O1 -fsanitize=address,undefined \
-    -I${REMOTE_DIR}/native \
-    -o ${REMOTE_DIR}/fuzz_asan \
-    ${REMOTE_DIR}/native/fuzz_harness.c
+    -I\${REMOTE_DIR}/native \
+    -o \${REMOTE_DIR}/fuzz_asan \
+    \${REMOTE_DIR}/native/fuzz_harness.c
 echo "--- Running ASAN harness ---"
-${REMOTE_DIR}/fuzz_asan && echo "ASAN: PASS"
+\${REMOTE_DIR}/fuzz_asan && echo "ASAN: PASS"
 
 echo "--- Building Valgrind harness ---"
 gcc -g -O1 \
-    -I${REMOTE_DIR}/native \
-    -o ${REMOTE_DIR}/fuzz_vg \
-    ${REMOTE_DIR}/native/fuzz_harness.c
+    -I\${REMOTE_DIR}/native \
+    -o \${REMOTE_DIR}/fuzz_vg \
+    \${REMOTE_DIR}/native/fuzz_harness.c
 echo "--- Running Valgrind memcheck ---"
-valgrind --tool=memcheck --error-exitcode=1 --quiet ${REMOTE_DIR}/fuzz_vg && echo "Valgrind: PASS"
+valgrind --tool=memcheck --error-exitcode=1 --quiet \${REMOTE_DIR}/fuzz_vg && echo "Valgrind: PASS"
 REMOTE_FUZZ
 
 echo ""
