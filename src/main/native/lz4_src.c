@@ -287,7 +287,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             if ((slot >> 16) == gen) {
                 int sv = (pos & ~0xFFFF) | (int)(slot & 0xFFFF);
                 if (sv >= pos) sv -= 0x10000;
-                if (sv > limit) {
+                if (sv >= 0 && sv > limit) {
                     uint32_t sv4;
                     memcpy(&sv4, src + sv, 4);
                     if (sv4 == pos4) {

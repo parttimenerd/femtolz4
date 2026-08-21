@@ -29,19 +29,6 @@ public final class LZ4 {
     private static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     private static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
-    private static final sun.misc.Unsafe UNSAFE;
-    private static final long BYTE_BASE;
-    static {
-        sun.misc.Unsafe u = null;
-        try {
-            java.lang.reflect.Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
-            f.setAccessible(true);
-            u = (sun.misc.Unsafe) f.get(null);
-        } catch (Exception ignored) {}
-        UNSAFE    = u;
-        BYTE_BASE = u != null ? u.arrayBaseOffset(byte[].class) : 0L;
-    }
-
     /*
      * Generation-tagged hash table for compressFast — avoids Arrays.fill per call.
      * Each int slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
@@ -156,7 +143,7 @@ public final class LZ4 {
      * chain=1 fast path using a thread-local int[] hash table.
      * Each slot encodes (gen<<16)|(pos&0xFFFF); no fill needed between calls.
      * extend() and emitSequence() common-case are inlined to stay within JIT
-     * inlining budget. Unsafe is used for unaligned int/long loads.
+     * inlining budget.
      */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
@@ -180,10 +167,8 @@ public final class LZ4 {
 
             if (pos <= safeEnd2) {
                 int limit = pos - WINDOW_SIZE;
-                /* 4-byte multiply-shift hash using Unsafe (little-endian, unaligned). */
-                int v4 = UNSAFE != null
-                    ? UNSAFE.getInt(src, BYTE_BASE + pos)
-                    : (int) INT_LE.get(src, pos);
+                /* 4-byte multiply-shift hash using var handle (little-endian, unaligned). */
+                int v4 = (int) INT_LE.get(src, pos);
                 int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
                 int slot = head[h];
@@ -195,20 +180,14 @@ public final class LZ4 {
                     int sv = (pos & ~0xFFFF) | (slot & 0xFFFF);
                     if (sv >= pos) sv -= 0x10000;
                     if (sv >= 0 && sv > limit) {
-                        int sv4 = UNSAFE != null
-                            ? UNSAFE.getInt(src, BYTE_BASE + sv)
-                            : (int) INT_LE.get(src, sv);
+                        int sv4 = (int) INT_LE.get(src, sv);
                         if (sv4 == v4) {
                             /* Inlined extend(). */
                             int maxMatch = safeEnd - pos;
                             int len = MIN_MATCH;
                             while (len + 8 <= maxMatch) {
-                                long svL  = UNSAFE != null
-                                    ? UNSAFE.getLong(src, BYTE_BASE + sv  + len)
-                                    : (long) LONG_LE.get(src, sv  + len);
-                                long posL = UNSAFE != null
-                                    ? UNSAFE.getLong(src, BYTE_BASE + pos + len)
-                                    : (long) LONG_LE.get(src, pos + len);
+                                long svL  = (long) LONG_LE.get(src, sv  + len);
+                                long posL = (long) LONG_LE.get(src, pos + len);
                                 long diff = svL ^ posL;
                                 if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
                                 len += 8;
@@ -397,18 +376,6 @@ public final class LZ4 {
         return (v * 0x9E3779B9) >>> (32 - HASH_BITS);
     }
 
-    static int get4(byte[] b, int p) {
-        return UNSAFE != null
-            ? UNSAFE.getInt(b, BYTE_BASE + p)
-            : (int) INT_LE.get(b, p);
-    }
-
-    private static long getLong(byte[] b, int p) {
-        return UNSAFE != null
-            ? UNSAFE.getLong(b, BYTE_BASE + p)
-            : (long) LONG_LE.get(b, p);
-    }
-
     private static void insert(int[] head, int[] tail, byte[] src, int pos) {
         int h = hash5(src, pos);
         tail[pos & WINDOW_MASK] = head[h];
@@ -434,7 +401,7 @@ public final class LZ4 {
         int bestLen  = 0;
         int bestDist = 0;
         for (int sv = tail[position & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
-            if (get4(src, sv) != get4(src, position)
+            if (INT_LE.get(src, sv) != INT_LE.get(src, position)
                     || src[sv + bestLen] != src[position + bestLen]) {
                 if (--chainLeft == 0) break;
                 continue;
@@ -453,7 +420,7 @@ public final class LZ4 {
     private static int extend(byte[] src, int sv, int pos, int maxMatch) {
         int len = MIN_MATCH;
         while (len + 8 <= maxMatch) {
-            long diff = getLong(src, sv + len) ^ getLong(src, pos + len);
+            long diff = (long) LONG_LE.get(src, sv + len) ^ (long) LONG_LE.get(src, pos + len);
             if (diff != 0) return len + (Long.numberOfTrailingZeros(diff) >>> 3);
             len += 8;
         }
