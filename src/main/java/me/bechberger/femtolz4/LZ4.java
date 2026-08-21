@@ -55,6 +55,10 @@ public final class LZ4 {
     /* Reusable compress output buffer — avoids allocation on every call. */
     private static final ThreadLocal<byte[]> TL_DST = ThreadLocal.withInitial(() -> new byte[0]);
 
+    /* Reusable decompress output buffer — avoids allocation on every decompressJava call.
+       Grows to the high-water mark; never shrinks so it survives multi-block streams. */
+    private static final ThreadLocal<byte[]> TL_DECOMP = ThreadLocal.withInitial(() -> new byte[0]);
+
     /** Worst-case output size for {@code srcLen} uncompressed bytes. */
     public static int maxCompressedLength(int srcLen) {
         return srcLen + 16 + (srcLen / 255) + 1;
@@ -190,7 +194,7 @@ public final class LZ4 {
                 if ((slot >>> 16) == gen) {
                     int sv = (pos & ~0xFFFF) | (slot & 0xFFFF);
                     if (sv >= pos) sv -= 0x10000;
-                    if (sv > limit) {
+                    if (sv >= 0 && sv > limit) {
                         int sv4 = UNSAFE != null
                             ? UNSAFE.getInt(src, BYTE_BASE + sv)
                             : (int) INT_LE.get(src, sv);
@@ -376,9 +380,13 @@ public final class LZ4 {
 
     /** Pure-Java decompress, bypassing the native path. For benchmarking. */
     static byte[] decompressJava(byte[] src, int decompressedSize) {
-        byte[] dst = new byte[decompressedSize];
+        byte[] dst = TL_DECOMP.get();
+        if (dst.length < decompressedSize) {
+            dst = new byte[decompressedSize];
+            TL_DECOMP.set(dst);
+        }
         int n = decompressJavaImpl(src, 0, src.length, dst, 0, decompressedSize);
-        return n == decompressedSize ? dst : Arrays.copyOf(dst, n);
+        return Arrays.copyOf(dst, n);
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────

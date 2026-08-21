@@ -190,7 +190,11 @@ def build_linux_amd64_cross() -> None:
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),
-        "-static-libgcc",
+        # Do not link against musl libc: the JVM process provides glibc, so
+        # any libc symbols we reference (memcpy etc.) resolve from the JVM's
+        # glibc at dlopen time.  This keeps the .so free of any libc dependency
+        # and works on both glibc and musl Linux systems.
+        "-nostdlib", "-static-libgcc",
         "-o", str(out),
     ])
     # macOS strip cannot parse ELF; use llvm-strip or accept the larger binary

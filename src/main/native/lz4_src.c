@@ -65,7 +65,17 @@ FORCE_INLINE void lz4__emit_literals(uint8_t *dst, int *op,
     if (lit_len >= 15)
         lz4__write_length_overflow(dst, op, lit_len);
     if (lit_len > 0) {
-        memcpy(dst + *op, src + lit_start, lit_len);
+        /* __builtin_memcpy for small sizes: compiler emits inline AVX stores,
+           avoiding the vzeroupper + memcpy@plt transition penalty after AVX2
+           match extension. Larger copies fall back to libc memcpy normally. */
+        if (lit_len <= 16) {
+            __builtin_memcpy(dst + *op, src + lit_start, lit_len);
+        } else if (lit_len <= 32) {
+            __builtin_memcpy(dst + *op, src + lit_start, 16);
+            __builtin_memcpy(dst + *op + 16, src + lit_start + 16, lit_len - 16);
+        } else {
+            memcpy(dst + *op, src + lit_start, lit_len);
+        }
         *op += lit_len;
     }
 }
