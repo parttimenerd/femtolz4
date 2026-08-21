@@ -68,7 +68,19 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         }
         if ((int64_t)op + lit_len > (int64_t)dst_end) return -2;
         if ((int64_t)ip + lit_len > (int64_t)src_end) return -3;
-        memcpy(dst + op, src + ip, (size_t)lit_len);
+        /* __builtin_memcpy for small literals: compiler emits inline SIMD stores,
+           avoiding the PLT call + vzeroupper transition penalty. */
+        if (lit_len <= 16) {
+            __builtin_memcpy(dst + op, src + ip, (size_t)lit_len);
+        } else if (lit_len <= 32) {
+            __builtin_memcpy(dst + op,      src + ip,      16);
+            __builtin_memcpy(dst + op + 16, src + ip + 16, (size_t)lit_len - 16);
+        } else if (lit_len <= 64) {
+            __builtin_memcpy(dst + op,      src + ip,      32);
+            __builtin_memcpy(dst + op + 32, src + ip + 32, (size_t)lit_len - 32);
+        } else {
+            memcpy(dst + op, src + ip, (size_t)lit_len);
+        }
         ip += (int)lit_len;
         op += (int)lit_len;
 
@@ -93,13 +105,15 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         if ((int64_t)op + match_len > (int64_t)dst_end) return -8;
         if (offset >= match_len) {
             /* No overlap: bulk copy. Use __builtin_memcpy for small sizes so
-               the compiler emits inline AVX stores instead of calling glibc's
-               memmove-checking memcpy (which falls back to SSE2 for small sizes). */
+               the compiler emits inline SIMD stores instead of a PLT call. */
             if (match_len <= 16) {
                 __builtin_memcpy(dst + op, dst + ms, (size_t)match_len);
             } else if (match_len <= 32) {
                 __builtin_memcpy(dst + op,      dst + ms,      16);
                 __builtin_memcpy(dst + op + 16, dst + ms + 16, (size_t)match_len - 16);
+            } else if (match_len <= 64) {
+                __builtin_memcpy(dst + op,      dst + ms,      32);
+                __builtin_memcpy(dst + op + 32, dst + ms + 32, (size_t)match_len - 32);
             } else {
                 memcpy(dst + op, dst + ms, (size_t)match_len);
             }

@@ -142,6 +142,8 @@ FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_
             return len;
         }
         len += 16;
+        __builtin_prefetch(src + sv  + len + 32, 0, 0);
+        __builtin_prefetch(src + pos + len + 32, 0, 0);
     }
 #elif defined(__AVX2__)
     while (len + 32 <= max_match) {
@@ -150,6 +152,8 @@ FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_
         uint32_t mask = (uint32_t)_mm256_movemask_epi8(_mm256_cmpeq_epi8(sv32, pos32));
         if (mask != 0xFFFFFFFFu) { return len + __builtin_ctz(~mask); }
         len += 32;
+        __builtin_prefetch(src + sv  + len + 64, 0, 0);
+        __builtin_prefetch(src + pos + len + 64, 0, 0);
     }
     while (len + 16 <= max_match) {
         __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
@@ -310,14 +314,14 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             /* prefetch source and hash table slot for next position */
             if (pos <= safe_end - 2) {
                 __builtin_prefetch(src + pos + 64, 0, 0);
-                __builtin_prefetch(htab + lz4__hash4(src + pos), 0, 1);
+                __builtin_prefetch(htab + lz4__hash4(src + pos), 0, 3);
             }
         } else {
             int step = (skip >> 6) + 1;
             int next = pos + step;
             if (next > src_len) next = src_len;
             if (next <= safe_end - 2)
-                __builtin_prefetch(htab + lz4__hash4(src + next), 0, 1);
+                __builtin_prefetch(htab + lz4__hash4(src + next), 0, 3);
             pos  = next;
             if (skip < (17 << 6)) skip++;
         }

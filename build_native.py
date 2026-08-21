@@ -136,7 +136,7 @@ def build_darwin_aarch64() -> None:
     extra_inc = [f"-I{inc / 'darwin'}"] if (inc / "darwin").exists() else []
 
     run([
-        "clang", "-O2", "-shared", "-fPIC",
+        "clang", "-O3", "-march=native", "-shared", "-fPIC",
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),
