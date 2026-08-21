@@ -277,7 +277,7 @@ public final class LZ4 {
         if (NativeLZ4.AVAILABLE) {
             int n = NativeLZ4.decompress(src, srcOff, srcLen, dst, dstOff, dstLen);
             if (n >= 0) return n;
-            throw new LZ4Exception("native LZ4 decompress failed (error " + n + ")");
+            // Native signalled an error — fall through to pure-Java for correct diagnosis.
         }
         return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen);
     }

@@ -112,6 +112,48 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
 
 /* ── JNI entry points ───────────────────────────────────────────────────── */
 
+/*
+ * JNI_OnLoad: verify that the CPU supports every SIMD/ISA feature compiled in.
+ * Returns JNI_ERR if a required feature is absent — System.load() will then
+ * throw UnsatisfiedLinkError, and NativeLZ4.AVAILABLE stays false so the
+ * Java fallback is used instead of crashing with SIGILL.
+ *
+ * On x86-64 (amd64) we require: SSE2, AVX2, FMA, BMI1, BMI2, POPCNT.
+ * On AArch64, NEON is mandatory — no runtime check needed.
+ */
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
+{
+    (void)vm; (void)reserved;
+
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    unsigned int eax, ebx, ecx, edx;
+
+    /* ── Leaf 1: SSE2, POPCNT, FMA, XSAVE ── */
+    __asm__ volatile("cpuid" : "=a"(eax),"=b"(ebx),"=c"(ecx),"=d"(edx)
+                             : "a"(1), "c"(0));
+    if (!(edx & (1u << 26))) return JNI_ERR;  /* SSE2 (EDX bit 26) */
+    if (!(ecx & (1u << 23))) return JNI_ERR;  /* POPCNT (ECX bit 23) */
+    if (!(ecx & (1u << 12))) return JNI_ERR;  /* FMA (ECX bit 12) */
+    if (!(ecx & (1u << 27))) return JNI_ERR;  /* XSAVE/XRESTORE (ECX bit 27) — needed for AVX2 */
+
+    /* ── OS must have enabled YMM state (XCR0 bits 2:1) ── */
+    unsigned int xcr0_lo;
+    __asm__ volatile("xgetbv" : "=a"(xcr0_lo) : "c"(0) : "edx");
+    if ((xcr0_lo & 0x6u) != 0x6u) return JNI_ERR;
+
+    /* ── Leaf 7 sub-leaf 0: AVX2, BMI1, BMI2 ── */
+    __asm__ volatile("cpuid" : "=a"(eax),"=b"(ebx),"=c"(ecx),"=d"(edx)
+                             : "a"(7), "c"(0));
+    if (!(ebx & (1u <<  3))) return JNI_ERR;  /* BMI1 (EBX bit 3) */
+    if (!(ebx & (1u <<  5))) return JNI_ERR;  /* AVX2 (EBX bit 5) */
+    if (!(ebx & (1u <<  8))) return JNI_ERR;  /* BMI2 (EBX bit 8) */
+
+    (void)eax; (void)ecx; (void)edx;
+#endif
+    /* ARM NEON is mandatory on AArch64 — no runtime check needed. */
+    return JNI_VERSION_1_6;
+}
+
 JNIEXPORT jint JNICALL
 Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     jbyteArray jSrc, jint src_off, jint src_len,
