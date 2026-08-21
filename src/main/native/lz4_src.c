@@ -185,7 +185,7 @@ FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_
  * Fast-path for max_chain==1: flat hash table (head[] only, no tail[]).
  * Uses the full 13-bit / 5-byte hash to keep match quality.
  */
-static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
+FORCE_INLINE int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
                             int pos, int src_len, int *out_dist)
 {
     int max_match = (src_len - PADDING_LITERALS) - pos;
@@ -214,7 +214,7 @@ static int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
 }
 
 /* Insert pos and find its best match in one pass (single hash computation). */
-static int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
+FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
                                   int pos, int src_len, int max_chain,
                                   int *out_dist)
 {
@@ -334,57 +334,59 @@ HOT int lz4_compress_block(lz4_stream_t *s,
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
-    int skip      = 1; /* skip acceleration: step = (skip>>6)+1, grows with consecutive misses */
+    int safe_end  = src_len - PADDING_LITERALS;
 
-    while (pos < src_len) {
-        int match_dist = 0;
-        int match_len;
+    if (max_chain == 1) {
+        /* ── chain=1: flat hash, skip acceleration, no lazy ── */
+        int skip = 1;
+        while (pos < src_len) {
+            int match_dist = 0;
+            int match_len  = lz4__flat_match(s, src, pos, src_len, &match_dist);
 
-        /* chain=1: flat hash table (head[] only, no tail[]), 12-bit hash, no lazy. */
-        if (max_chain == 1) {
-            match_len = lz4__flat_match(s, src, pos, src_len, &match_dist);
-        } else {
-            match_len = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
-        }
-
-        /* ── lazy matching (chain > 1 only) ─────────────────────────────── */
-        if (match_len >= MIN_MATCH && max_chain > 1 && pos + 1 < src_len) {
-            int lazy_dist = 0;
-            int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
-            if (lazy_len > match_len) {
-                pos++;
-                match_len  = lazy_len;
-                match_dist = lazy_dist;
-            }
-        }
-
-        /* ── emit sequence or advance ── */
-        if (match_len >= MIN_MATCH) {
-            skip = 1; /* reset skip counter */
-            int match_extra = match_len - MIN_MATCH;
-
-            lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
-            { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
-            op += 2;
-            lz4__emit_match_overflow(dst, &op, match_extra);
-
-            lit_start = pos + match_len;
-
-            int stride = (max_chain == 1) ? 2 : 1;
-            int insert_from = pos + 1;
-            while (insert_from < lit_start) {
-                if (max_chain == 1)
-                    s->head[lz4__hash(src + insert_from)] = insert_from;
-                else
-                    lz4__insert(s, src, insert_from);
-                insert_from += stride;
-            }
-            pos = lit_start;
-        } else {
-            if (max_chain == 1) {
+            if (match_len >= MIN_MATCH) {
+                skip = 1;
+                int match_extra = match_len - MIN_MATCH;
+                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
+                { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
+                op += 2;
+                lz4__emit_match_overflow(dst, &op, match_extra);
+                lit_start = pos + match_len;
+                for (int ip = pos + 1; ip < lit_start; ip += 2)
+                    s->head[lz4__hash(src + ip)] = ip;
+                pos = lit_start;
+            } else {
                 pos += (skip >> 6) + 1;
                 if (pos > src_len) pos = src_len;
                 if (skip < (17 << 6)) skip++;
+            }
+        }
+    } else {
+        /* ── chain>1: hash chain, lazy matching, no skip ── */
+        while (pos < src_len) {
+            int match_dist = 0;
+            int match_len  = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
+
+            if (match_len >= MIN_MATCH && pos + 1 < src_len) {
+                int lazy_dist = 0;
+                int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
+                if (lazy_len > match_len) {
+                    pos++;
+                    match_len  = lazy_len;
+                    match_dist = lazy_dist;
+                }
+            }
+
+            if (match_len >= MIN_MATCH) {
+                int match_extra = match_len - MIN_MATCH;
+                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
+                { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
+                op += 2;
+                lz4__emit_match_overflow(dst, &op, match_extra);
+                lit_start = pos + match_len;
+                int insert_end = lit_start < safe_end + 1 ? lit_start : safe_end + 1;
+                for (int ip = pos + 1; ip < insert_end; ip++)
+                    lz4__insert(s, src, ip);
+                pos = lit_start;
             } else {
                 pos++;
             }
