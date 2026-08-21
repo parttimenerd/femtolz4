@@ -42,6 +42,14 @@ public final class LZ4 {
         return t;
     });
 
+    /*
+     * Chain-path tables: reused across calls to avoid allocation per block.
+     * head[] must be filled with NIL before each call.
+     * tail[] need not be initialized: only slots reachable from a valid head[] entry are read.
+     */
+    private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
+    private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
+
     /* Reusable compress output buffer — avoids allocation on every call. */
     private static final ThreadLocal<byte[]> TL_DST = ThreadLocal.withInitial(() -> new byte[0]);
 
@@ -101,10 +109,9 @@ public final class LZ4 {
         }
         if (srcLen == 0) return 0;
 
-        int[] head = new int[HASH_SIZE];
-        long[] tail = new long[WINDOW_SIZE];  // bits[63:32]=value, bits[31:0]=pos
+        int[]  head    = TL_CHAIN_HEAD.get();
+        long[] tail    = TL_CHAIN_TAIL.get();
         Arrays.fill(head, NIL);
-        // tail uninitialized: only reached from valid head[] entries
 
         int op       = dstOff;
         int litStart = srcOff;
