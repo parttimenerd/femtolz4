@@ -124,9 +124,9 @@ public final class LZ4 {
             int matchDist = 0;
 
             if (pos <= safeEnd - 2) {
-                int v    = (int) INT_LE.get(src, pos) ^ ((src[pos + 4] & 0xFF) << 24);
-                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int pos4 = (int) INT_LE.get(src, pos);
+                int v    = pos4 ^ ((src[pos + 4] & 0xFF) << 24);
+                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int limit     = pos - WINDOW_SIZE;
                 int chainLeft = maxChain;
                 int bestLen   = 0;
@@ -174,9 +174,9 @@ public final class LZ4 {
             // Lazy matching
             if (matchLen >= MIN_MATCH && pos <= safeEnd - 3) {
                 int lp   = pos + 1;
-                int v    = (int) INT_LE.get(src, lp) ^ ((src[lp + 4] & 0xFF) << 24);
-                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int lp4  = (int) INT_LE.get(src, lp);
+                int v    = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
+                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int limit     = lp - WINDOW_SIZE;
                 int chainLeft = maxChain;
                 int lazyLen   = 0;
@@ -230,9 +230,9 @@ public final class LZ4 {
                 // Insert skipped positions (stride=1 for chain>1)
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
                 for (int ip = pos + 1; ip < insertEnd; ip++) {
-                    int v2 = (int) INT_LE.get(src, ip) ^ ((src[ip + 4] & 0xFF) << 24);
-                    int h2 = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
                     int ip4 = (int) INT_LE.get(src, ip);
+                    int v2  = ip4 ^ ((src[ip + 4] & 0xFF) << 24);
+                    int h2  = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
                     int prev2 = head[h2];
                     tail[ip & WINDOW_MASK] = ((long) ip4 << 32) | (prev2 & 0xFFFFFFFFL);
                     head[h2] = ip;
