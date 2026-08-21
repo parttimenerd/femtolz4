@@ -534,9 +534,6 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             op += 2;
             lz4__emit_match_overflow(dst, &op, match_extra);
             lit_start = pos + match_len;
-            /* stride-2 within-match inserts */
-            for (int i = pos + 1; i < lit_start; i += 2)
-                if (i <= safe_end - 2) htab[lz4__hash4(src + i)] = i;
             pos = lit_start;
             /* prefetch source and hash table slot for next position */
             if (pos <= safe_end - 2) {
