@@ -156,7 +156,9 @@ def build_linux_amd64_native() -> None:
 
     cc = shutil.which("gcc") or shutil.which("clang") or "gcc"
     run([
-        cc, "-O2", "-shared", "-fPIC",
+        cc, "-O3",
+        "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
+        "-shared", "-fPIC",
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),
@@ -182,7 +184,9 @@ def build_linux_amd64_cross() -> None:
     extra_inc = [f"-I{inc / 'linux'}"] if (inc / "linux").exists() else []
 
     run([
-        cross_cc, "-O2", "-shared", "-fPIC",
+        cross_cc, "-O3",
+        "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
+        "-shared", "-fPIC",
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),

@@ -333,6 +333,32 @@ static int lz4__best_match(const lz4_stream_t *s, const uint8_t *src,
             }
             len += 16;
         }
+#elif defined(__AVX2__)
+        /* AVX2: compare 32 bytes at once.  movemask on a 256-bit compare
+           produces a 32-bit mask; tzcnt on the inverted mask gives the
+           first mismatching byte position directly. */
+        while (len + 32 <= max_match) {
+            __m256i sv32  = _mm256_loadu_si256((const __m256i *)(src + sv  + len));
+            __m256i pos32 = _mm256_loadu_si256((const __m256i *)(src + pos + len));
+            uint32_t mask = (uint32_t)_mm256_movemask_epi8(
+                                _mm256_cmpeq_epi8(sv32, pos32));
+            if (mask != 0xFFFFFFFFu) {
+                len += __builtin_ctz(~mask);
+                goto done_extend;
+            }
+            len += 32;
+        }
+        /* Mop up remaining < 32 bytes with SSE2 16-byte steps. */
+        while (len + 16 <= max_match) {
+            __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
+            __m128i pos16 = _mm_loadu_si128((const __m128i *)(src + pos + len));
+            int     mask  = _mm_movemask_epi8(_mm_cmpeq_epi8(sv16, pos16));
+            if (mask != 0xFFFF) {
+                len += __builtin_ctz(~mask);
+                goto done_extend;
+            }
+            len += 16;
+        }
 #elif defined(__SSE2__)
         /* SSE2: same idea with _mm_cmpeq_epi8 + _mm_movemask_epi8.
            movemask collapses the 16 comparison bits into a 16-bit integer
