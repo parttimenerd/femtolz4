@@ -220,7 +220,34 @@ public final class LZ4 {
             if (matchLen >= MIN_MATCH) {
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
-                op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
+                // Inline emit sequence
+                dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
+                if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
+                if (litLen > 0) {
+                    // Inline copyLiterals
+                    if (litLen <= 32) {
+                        if (litLen >= 16) {
+                            LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
+                            LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
+                            LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
+                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                        } else if (litLen >= 8) {
+                            LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
+                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                        } else if (litLen >= 4) {
+                            INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
+                            INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
+                        } else {
+                            for (int ci = 0; ci < litLen; ci++) dst[op + ci] = src[litStart + ci];
+                        }
+                    } else {
+                        System.arraycopy(src, litStart, dst, op, litLen);
+                    }
+                    op += litLen;
+                }
+                dst[op++] = (byte)  matchDist;
+                dst[op++] = (byte) (matchDist >>> 8);
+                if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
                 for (int ip = pos + 1; ip < insertEnd; ip++) {
@@ -240,7 +267,11 @@ public final class LZ4 {
         if (pos < srcEnd) pos = srcEnd;
 
         int litLen = srcEnd - litStart;
-        if (litLen > 0) op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
+        if (litLen > 0) {
+            dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4));
+            if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+            op = copyLiterals(src, litStart, dst, op, litLen);
+        }
         return op - dstOff;
     }
 
@@ -288,19 +319,32 @@ public final class LZ4 {
                         int matchDist  = pos - sv;
                         dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
                                            | (matchExtra < 15 ? matchExtra : 15));
-                        if (litLen >= 15) {
-                            int rem = litLen - 15;
-                            while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
-                            dst[op++] = (byte) rem;
+                        if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+                        if (litLen > 0) {
+                            // Inline copyLiterals — avoids call overhead on hot path
+                            if (litLen <= 32) {
+                                if (litLen >= 16) {
+                                    LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
+                                    LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
+                                    LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
+                                    LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                                } else if (litLen >= 8) {
+                                    LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
+                                    LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                                } else if (litLen >= 4) {
+                                    INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
+                                    INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
+                                } else {
+                                    for (int i = 0; i < litLen; i++) dst[op + i] = src[litStart + i];
+                                }
+                            } else {
+                                System.arraycopy(src, litStart, dst, op, litLen);
+                            }
+                            op += litLen;
                         }
-                        if (litLen > 0) { op = copyLiterals(src, litStart, dst, op, litLen); }
                         dst[op++] = (byte) matchDist;
                         dst[op++] = (byte) (matchDist >>> 8);
-                        if (matchExtra >= 15) {
-                            int rem = matchExtra - 15;
-                            while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
-                            dst[op++] = (byte) rem;
-                        }
+                        if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                         litStart = pos + len;
                         pos = litStart;
                         if (pos >= safeEnd2) break;
@@ -320,11 +364,7 @@ public final class LZ4 {
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
             dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
-            if (litLen >= 15) {
-                int rem = litLen - 15;
-                while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
-                dst[op++] = (byte) rem;
-            }
+            if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
         return op - dstOff;
