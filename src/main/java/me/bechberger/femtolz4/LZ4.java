@@ -18,7 +18,7 @@ public final class LZ4 {
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
     private static final int HASH_BITS      = 13;
     private static final int HASH_SIZE      = 1 << HASH_BITS;
-    private static final int HASH_BITS_FAST = 12;
+    private static final int HASH_BITS_FAST = 13;
     private static final int HASH_SIZE_FAST = 1 << HASH_BITS_FAST;
     private static final int MIN_MATCH   = 4;
     private static final int PADDING     = 5;
@@ -26,6 +26,30 @@ public final class LZ4 {
 
     private static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     private static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
+
+    private static final sun.misc.Unsafe UNSAFE;
+    static {
+        sun.misc.Unsafe u = null;
+        try {
+            java.lang.reflect.Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+            f.setAccessible(true);
+            u = (sun.misc.Unsafe) f.get(null);
+        } catch (Exception ignored) {}
+        UNSAFE = u;
+    }
+    private static final long BYTE_ARRAY_BASE_OFFSET =
+        UNSAFE != null ? UNSAFE.arrayBaseOffset(byte[].class) : 0L;
+
+    @SuppressWarnings("unused")
+    private static void prefetch(byte[] b, int pos) {
+        // prefetchRead is not available on all JVM implementations;
+        // this is a best-effort hint: touch the offset to warm the TLB.
+        if (UNSAFE != null && pos >= 0 && pos < b.length)
+            UNSAFE.getByte(b, BYTE_ARRAY_BASE_OFFSET + pos);
+    }
+
+    private static final ThreadLocal<int[]> TL_FAST_HEAD = ThreadLocal.withInitial(
+        () -> new int[HASH_SIZE_FAST]);
 
     /** Worst-case output size for {@code srcLen} uncompressed bytes. */
     public static int maxCompressedLength(int srcLen) {
@@ -164,7 +188,7 @@ public final class LZ4 {
      */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
-        int[] head = new int[HASH_SIZE_FAST];
+        int[] head = TL_FAST_HEAD.get();
         Arrays.fill(head, NIL);
         int op       = dstOff;
         int litStart = srcOff;
@@ -205,9 +229,11 @@ public final class LZ4 {
                 }
                 pos = matchEnd;
             } else {
-                pos += (skip >> 6) + 1;
+                int step = (skip >> 6) + 1;
+                pos += step;
                 if (pos > srcEnd) pos = srcEnd;
                 if (skip < (17 << 6)) skip++;
+                prefetch(src, pos + 256);
             }
         }
 
