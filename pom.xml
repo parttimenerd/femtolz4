@@ -34,6 +34,15 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <!-- set -Dnative.skip=true to skip the build_native.py step -->
         <native.skip>false</native.skip>
+        <!--
+          Test suite selection (JUnit Platform tag filtering; applies to both
+          JUnit Jupiter @Test and jqwik @Property, since jqwik's @Tag maps to
+          the same platform tags):
+            mvn test                    -> fast suite (excludes "slow")
+            mvn test -Dtest.full=true   -> full suite (nothing excluded)
+        -->
+        <test.full>false</test.full>
+        <test.excludedGroups>slow</test.excludedGroups>
     </properties>
 
     <dependencies>
@@ -84,6 +93,9 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.2</version>
+                <configuration>
+                    <excludedGroups>${test.excludedGroups}</excludedGroups>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -99,4 +111,19 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Activated by -Dtest.full=true: runs the full test suite, including
+             tests tagged "slow" (exhaustive truncation sweeps, 100MB fuzz, etc). -->
+        <profile>
+            <id>full-tests</id>
+            <activation>
+                <property><name>test.full</name><value>true</value></property>
+            </activation>
+            <properties>
+                <test.excludedGroups></test.excludedGroups>
+            </properties>
+        </profile>
+    </profiles>
 </project>
+

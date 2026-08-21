@@ -16,6 +16,8 @@ import java.io.InputStream;
  * <p>Reads the frame header on construction, then decompresses blocks on demand.
  * Handles both compressed and raw (uncompressed) blocks, and transparently
  * concatenated LZ4 frames (multiple back-to-back frames in one stream).
+ *
+ * @see <a href="https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md">LZ4 frame format spec</a>
  */
 public final class LZ4FrameInputStream extends InputStream {
 
@@ -93,6 +95,13 @@ public final class LZ4FrameInputStream extends InputStream {
 
         boolean isRaw    = (sizeField & 0x80000000) != 0;
         int     payloadLen = sizeField & 0x7FFFFFFF;
+
+        // A well-formed frame never declares a block larger than blockMaxSize
+        // (the max size negotiated in BD). Reject up front instead of trying
+        // to allocate an attacker-controlled amount of memory for a truncated
+        // or malicious stream.
+        if (payloadLen < 0 || payloadLen > blockMaxSize)
+            throw new LZ4Exception("block size " + payloadLen + " exceeds max " + blockMaxSize);
 
         byte[] payload = new byte[payloadLen];
         readFully(payload, payloadLen);

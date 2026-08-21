@@ -15,20 +15,21 @@
 
 /* ── Thread-local compress state ─────────────────────────────────────────── */
 
-/* chain=1 fast path: 8 KB uint16_t table storing low-16 position deltas.
-   Zeroed once at thread-init time; no reset needed between blocks. */
-static _Thread_local uint16_t *tl_htab = NULL;
+/* chain=1 fast path: generation-tagged uint32_t table (16 KB).
+   No reset between calls — generation counter avoids memset. */
+static _Thread_local uint32_t *tl_htab = NULL;
+static _Thread_local uint16_t  tl_gen  = 0;
 
-/* chain≥2: full stream (head[] + tail[]), reset (memset head[]) each call. */
-static _Thread_local lz4_stream_t *tl_stream = NULL;
-
-static uint16_t *get_htab(void)
+static uint32_t *get_htab(void)
 {
     if (!tl_htab) {
-        tl_htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
+        tl_htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
     }
     return tl_htab;
 }
+
+/* chain>=2: full stream (head[] + tail[]), reset each call. */
+static _Thread_local lz4_stream_t *tl_stream = NULL;
 
 static lz4_stream_t *get_stream(void)
 {
@@ -51,7 +52,10 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
 
     while (ip < src_end) {
         int token   = src[ip++];
-        int lit_len = token >> 4;
+        /* int64_t accumulators: a crafted/truncated block with many 0xFF
+           continuation bytes must not be able to overflow a 32-bit length
+           into a negative value and slip past the bounds checks below. */
+        int64_t lit_len = token >> 4;
         int mex     = token & 0xF;
         int b;
 
@@ -62,11 +66,11 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
                 lit_len += b;
             } while (b == 255);
         }
-        if (op + lit_len > dst_end) return -2;
-        if (ip + lit_len > src_end) return -3;
-        memcpy(dst + op, src + ip, lit_len);
-        ip += lit_len;
-        op += lit_len;
+        if ((int64_t)op + lit_len > (int64_t)dst_end) return -2;
+        if ((int64_t)ip + lit_len > (int64_t)src_end) return -3;
+        memcpy(dst + op, src + ip, (size_t)lit_len);
+        ip += (int)lit_len;
+        op += (int)lit_len;
 
         if (ip >= src_end) break; /* last sequence has no match */
 
@@ -75,7 +79,7 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         ip += 2;
         if (offset == 0) return -5;
 
-        int match_len = D_MIN_MATCH + mex;
+        int64_t match_len = D_MIN_MATCH + mex;
         if (__builtin_expect(mex == 15, 0)) {
             do {
                 if (ip >= src_end) return -6;
@@ -85,25 +89,25 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         }
 
         int ms = op - offset;
-        if (ms < dst_off)             return -7;
-        if (op + match_len > dst_end) return -8;
+        if (ms < dst_off)                          return -7;
+        if ((int64_t)op + match_len > (int64_t)dst_end) return -8;
         if (offset >= match_len) {
             /* No overlap: bulk copy. */
-            memcpy(dst + op, dst + ms, match_len);
+            memcpy(dst + op, dst + ms, (size_t)match_len);
         } else if (offset == 1) {
             /* Run of one repeated byte: fill is fastest. */
-            memset(dst + op, dst[ms], match_len);
+            memset(dst + op, dst[ms], (size_t)match_len);
         } else {
             /* Overlap: copy `offset` bytes at a time so earlier output
                bytes are replicated forward (like a SIMD splat). */
-            int i = 0;
+            int64_t i = 0;
             while (i + offset <= match_len) {
-                memcpy(dst + op + i, dst + ms + i, offset);
+                memcpy(dst + op + i, dst + ms + i, (size_t)offset);
                 i += offset;
             }
-            memcpy(dst + op + i, dst + ms + i, match_len - i);
+            memcpy(dst + op + i, dst + ms + i, (size_t)(match_len - i));
         }
-        op += match_len;
+        op += (int)match_len;
     }
     return op - dst_off;
 }
@@ -163,13 +167,12 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     jbyte *dst = (*env)->GetPrimitiveArrayCritical(env, jDst, NULL);
     int result;
     if (max_chain == 1) {
-        uint16_t *htab = get_htab();
+        uint32_t *htab = get_htab();
         if (!htab) { result = 0; goto done; }
-        memset(htab, 0, LZ4_HASH_SIZE_FAST * sizeof(uint16_t));
         result = lz4_compress_fast(
                             (const uint8_t *)(src + src_off),
                             (uint8_t *)(dst + dst_off),
-                            src_len, htab);
+                            src_len, htab, ++tl_gen);
     } else {
         lz4_stream_t *s = get_stream();
         if (!s) { result = 0; goto done; }

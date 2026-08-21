@@ -27,28 +27,30 @@ static int femto_decompress_local(const uint8_t *src, int src_len,
 {
     int ip = 0, op = 0;
     while (ip < src_len) {
-        int tok = src[ip++], ll = tok >> 4, mex = tok & 0xF, b;
+        int tok = src[ip++], mex = tok & 0xF, b;
+        /* int64_t: same overflow guard as femtolz4_jni.c's femto_decompress. */
+        int64_t ll = tok >> 4;
         if (ll == 15) { do { if (ip >= src_len) return -1; b = src[ip++]; ll += b; } while (b == 255); }
-        if (op + ll > dst_len || ip + ll > src_len) return -2;
-        memcpy(dst + op, src + ip, ll); ip += ll; op += ll;
+        if ((int64_t)op + ll > (int64_t)dst_len || (int64_t)ip + ll > (int64_t)src_len) return -2;
+        memcpy(dst + op, src + ip, (size_t)ll); ip += (int)ll; op += (int)ll;
         if (ip >= src_len) break;
         if (ip + 2 > src_len) return -3;
         int off = (int)src[ip] | ((int)src[ip+1] << 8); ip += 2;
         if (off == 0) return -4;
-        int ml = 4 + mex;
+        int64_t ml = 4 + mex;
         if (mex == 15) { do { if (ip >= src_len) return -5; b = src[ip++]; ml += b; } while (b == 255); }
         int ms = op - off;
-        if (ms < 0 || op + ml > dst_len) return -6;
+        if (ms < 0 || (int64_t)op + ml > (int64_t)dst_len) return -6;
         if (off >= ml) {
-            memcpy(dst + op, dst + ms, ml);
+            memcpy(dst + op, dst + ms, (size_t)ml);
         } else if (off == 1) {
-            memset(dst + op, dst[ms], ml);
+            memset(dst + op, dst[ms], (size_t)ml);
         } else {
-            int i = 0;
-            while (i + off <= ml) { memcpy(dst+op+i, dst+ms+i, off); i += off; }
-            memcpy(dst+op+i, dst+ms+i, ml-i);
+            int64_t i = 0;
+            while (i + off <= ml) { memcpy(dst+op+i, dst+ms+i, (size_t)off); i += off; }
+            memcpy(dst+op+i, dst+ms+i, (size_t)(ml-i));
         }
-        op += ml;
+        op += (int)ml;
     }
     return op;
 }
@@ -70,9 +72,9 @@ static int run_roundtrip(const uint8_t *src, int src_len, int max_chain, const c
 
     int comp_len;
     if (max_chain == 1) {
-        uint16_t *htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
+        uint32_t *htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
         if (!htab) { free(comp); free(decomp); return -99; }
-        comp_len = lz4_compress_fast(src, comp, src_len, htab);
+        comp_len = lz4_compress_fast(src, comp, src_len, htab, 1);
         free(htab);
     } else {
         lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
@@ -169,17 +171,60 @@ int main(void) {
         failures += run_invalid_decomp(buf, sz, 4096, label);
     }
 
-    /* ── Truncated valid compressed data ── */
+    /* ── Truncated valid compressed data (exhaustive: every offset) ── */
     fill_random(buf, 1024, &seed);
     {
-        uint16_t *htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
-        int clen = lz4_compress_fast(buf, buf2, 1024, htab);
+        uint32_t *htab = (uint32_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint32_t));
+        int clen = lz4_compress_fast(buf, buf2, 1024, htab, 1);
         free(htab);
-        for (int trunc = 1; trunc < clen; trunc += (clen / 20) + 1) {
+        for (int trunc = 0; trunc < clen; trunc++) {
             char label[80];
             snprintf(label, sizeof(label), "truncated clen=%d trunc=%d", clen, trunc);
+            /* Every prefix of a valid compressed block must either be
+               rejected cleanly (negative return) or, if accepted, must not
+               read/write out of bounds — never crash. */
             failures += run_invalid_decomp(buf2, trunc, 1024, label);
+            /* Also try with an undersized destination buffer, forcing the
+               overflow checks to trigger before any input-underflow checks. */
+            failures += run_invalid_decomp(buf2, trunc, 16, label);
         }
+    }
+
+    /* ── Crafted malicious inputs: length-field integer overflow attempts ──
+     * A token with lit_len/mex nibble == 15 is followed by a chain of 0xFF
+     * continuation bytes. A very long chain pushes the accumulated length
+     * close to or past INT_MAX; the decompressor must reject it via the
+     * int64_t-based bounds checks rather than wrapping to a small/negative
+     * value and proceeding with an out-of-bounds copy.
+     */
+    {
+        uint8_t *eviltoken = (uint8_t *)malloc(BLOCK_SIZE);
+        if (eviltoken) {
+            /* token=0xFF (lit_len nibble=15, match_extra nibble=15), then a
+               long run of 0xFF length-overflow bytes, no terminator. */
+            eviltoken[0] = 0xFF;
+            memset(eviltoken + 1, 0xFF, BLOCK_SIZE - 1);
+            failures += run_invalid_decomp(eviltoken, BLOCK_SIZE, 4096, "evil-literal-overflow");
+            failures += run_invalid_decomp(eviltoken, BLOCK_SIZE, 16,   "evil-literal-overflow-small-dst");
+
+            /* token=0x0F (0 literals, match_extra nibble=15) + offset=1 +
+               long 0xFF chain for match_len overflow. */
+            eviltoken[0] = 0x0F;
+            eviltoken[1] = 0x01; eviltoken[2] = 0x00; /* offset = 1 */
+            memset(eviltoken + 3, 0xFF, BLOCK_SIZE - 3);
+            failures += run_invalid_decomp(eviltoken, BLOCK_SIZE, 4096, "evil-match-overflow");
+            failures += run_invalid_decomp(eviltoken, BLOCK_SIZE, 16,   "evil-match-overflow-small-dst");
+
+            free(eviltoken);
+        }
+    }
+
+    /* ── Crafted malicious inputs: match offset pointing before dst start ── */
+    {
+        /* 1 literal 'A', then a match with a huge offset — matchSrc must be
+           rejected as before the output buffer start, not wrap/underflow. */
+        uint8_t evil[] = { 0x11, 'A', (uint8_t)0xFF, (uint8_t)0xFF };
+        failures += run_invalid_decomp(evil, sizeof(evil), 4096, "evil-huge-offset");
     }
 
     free(buf); free(buf2);

@@ -65,6 +65,15 @@ class FuzzTest {
         assertArrayEquals(data, dst);
     }
 
+    @Property(tries = 200)
+    @Tag("slow")
+    void femtoToYawkatLarge(@ForAll @Size(min = 1, max = 100 * 1024 * 1024) byte[] data) {
+        byte[] compressed = LZ4.compress(data, 1);
+        byte[] dst        = new byte[data.length];
+        YAWKAT_DEC.decompress(compressed, 0, dst, 0, data.length);
+        assertArrayEquals(data, dst);
+    }
+
     // ── Cross-compat: yawkat → femtolz4 ──────────────────────────────────────
 
     @Property(tries = 500)
@@ -77,7 +86,7 @@ class FuzzTest {
 
     // ── All chain depths produce valid round-trip output ─────────────────────
 
-    @Property(tries = 200)
+    @Property(tries = 1000)
     void allChainDepths(@ForAll @Size(max = 16384) byte[] data) {
         for (int chain : new int[]{1, 2, 4, 8, 16, 64}) {
             byte[] compressed   = LZ4.compress(data, chain);

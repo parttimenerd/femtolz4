@@ -16,6 +16,8 @@ import java.io.OutputStream;
  * <p>Data is split into independent blocks of up to {@value #DEFAULT_BLOCK_SIZE} bytes
  * (configurable). The output is compatible with the reference {@code lz4} CLI tool
  * and any spec-compliant LZ4 frame decoder.
+ *
+ * @see <a href="https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md">LZ4 frame format spec</a>
  */
 public final class LZ4FrameOutputStream extends OutputStream {
 

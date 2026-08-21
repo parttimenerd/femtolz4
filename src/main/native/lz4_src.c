@@ -38,8 +38,11 @@
 
 /* ── Primitives ─────────────────────────────────────────────────────────── */
 
+#define FORCE_INLINE static inline __attribute__((always_inline))
+#define HOT          __attribute__((hot))
+
 /* Write overflow bytes for a length field that exceeded 15 (the nibble cap). */
-static void lz4__write_length_overflow(uint8_t *dst, int *op, int len)
+FORCE_INLINE void lz4__write_length_overflow(uint8_t *dst, int *op, int len)
 {
     int rem = len - 15;
     for (; rem >= 255; rem -= 255)
@@ -54,7 +57,7 @@ static void lz4__write_length_overflow(uint8_t *dst, int *op, int len)
  *              low  nibble = match length − MIN_MATCH (capped at 15)
  * If either nibble overflows 15, extra bytes follow (255... then remainder).
  */
-static void lz4__emit_literals(uint8_t *dst, int *op,
+FORCE_INLINE void lz4__emit_literals(uint8_t *dst, int *op,
                                 const uint8_t *src, int lit_start,
                                 int lit_len, int match_extra)
 {
@@ -68,7 +71,7 @@ static void lz4__emit_literals(uint8_t *dst, int *op,
 }
 
 /* Write match-length overflow bytes (called when match_extra >= 15). */
-static void lz4__emit_match_overflow(uint8_t *dst, int *op, int match_extra)
+FORCE_INLINE void lz4__emit_match_overflow(uint8_t *dst, int *op, int match_extra)
 {
     if (match_extra >= 15)
         lz4__write_length_overflow(dst, op, match_extra);
@@ -76,7 +79,7 @@ static void lz4__emit_match_overflow(uint8_t *dst, int *op, int match_extra)
 
 /* 5-byte multiply-shift hash.  Folding in the 5th byte improves distribution
    on binary/heap data compared to a plain 4-byte hash. */
-static uint32_t lz4__hash(const uint8_t *p)
+FORCE_INLINE uint32_t lz4__hash(const uint8_t *p)
 {
     uint32_t v;
     memcpy(&v, p, 4);
@@ -85,7 +88,7 @@ static uint32_t lz4__hash(const uint8_t *p)
 }
 
 /* 4-byte hash for the chain=1 fast path: one fewer load, ~2x faster. */
-static uint32_t lz4__hash4(const uint8_t *p)
+FORCE_INLINE uint32_t lz4__hash4(const uint8_t *p)
 {
     uint32_t v;
     memcpy(&v, p, 4);
@@ -94,7 +97,7 @@ static uint32_t lz4__hash4(const uint8_t *p)
 
 /* Push position into the hash chain for src[pos].
    Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash). */
-static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
+FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
     uint32_t h             = lz4__hash(src + pos);
     s->tail[pos & WINDOW_MASK] = s->head[h];
@@ -107,7 +110,7 @@ static void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
  * SIMD where available (NEON or AVX2, chosen at compile time per platform),
  * then 8-byte scalar steps, then a final byte-by-byte fragment.
  */
-static int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_match)
+FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_match)
 {
     int len = MIN_MATCH;
 #ifdef __ARM_NEON
@@ -238,19 +241,21 @@ void lz4_init(lz4_stream_t *s)
 }
 
 /*
- * Chain=1 fast-path using a uint16_t[LZ4_HASH_SIZE_FAST] hash table (8 KB).
- * Stores the low 16 bits of each position; full position is recovered as
- * sv = (pos & ~0xFFFF) | htab[h], adjusted by -0x10000 if sv >= pos.
- * Caller must zero the table before the first call.
+ * Chain=1 fast-path using a uint32_t[LZ4_HASH_SIZE_FAST] generation-tagged table.
+ * Each slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
+ * Valid iff (slot >> 16) == gen.  Position recovered as:
+ *   sv = (pos & ~0xFFFF) | (slot & 0xFFFF); if (sv >= pos) sv -= 0x10000.
+ * Caller increments gen each call — no memset needed.
  */
-int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
-                      int src_len, uint16_t *htab)
+HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
+                      int src_len, uint32_t *htab, uint16_t gen)
 {
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
     int skip      = 1;
     int safe_end  = src_len - PADDING_LITERALS;
+    uint32_t gen_tag = (uint32_t)gen << 16;  /* bits[31:16] of a valid slot */
 
     while (pos < src_len) {
         int match_dist = 0;
@@ -263,16 +268,19 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             uint32_t pos4;
             memcpy(&pos4, src + pos, 4);
 
-            int sv = (pos & ~0xFFFF) | htab[h];
-            if (sv >= pos) sv -= 0x10000;
-            htab[h] = (uint16_t)pos;
+            uint32_t slot = htab[h];
+            htab[h] = gen_tag | (uint32_t)(pos & 0xFFFF);
 
-            if (sv > limit) {
-                uint32_t sv4;
-                memcpy(&sv4, src + sv, 4);
-                if (sv4 == pos4) {
-                    match_len  = lz4__extend_match(src, sv, pos, max_match);
-                    match_dist = pos - sv;
+            if ((slot >> 16) == gen) {
+                int sv = (pos & ~0xFFFF) | (int)(slot & 0xFFFF);
+                if (sv >= pos) sv -= 0x10000;
+                if (sv > limit) {
+                    uint32_t sv4;
+                    memcpy(&sv4, src + sv, 4);
+                    if (sv4 == pos4) {
+                        match_len  = lz4__extend_match(src, sv, pos, max_match);
+                        match_dist = pos - sv;
+                    }
                 }
             }
         }
@@ -307,7 +315,7 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
     return op;
 }
 
-int lz4_compress_block(lz4_stream_t *s,
+HOT int lz4_compress_block(lz4_stream_t *s,
                        const uint8_t *src, uint8_t *dst,
                        int src_len, int max_chain)
 {
@@ -390,7 +398,8 @@ int lz4_compress(const uint8_t *src, uint8_t *dst, int src_len, int max_chain)
 
 /* ── LZ4 frame helpers ─────────────────────────────────────────────────── */
 
-/* xxHash-32 (seed=0).  Used only for the 1-byte header checksum. */
+/* xxHash-32 (seed=0).  Used only for the 1-byte header checksum.
+ * Spec: https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md */
 static uint32_t lz4__xxhash32(const uint8_t *data, int len)
 {
     static const uint32_t PRIME1 = 0x9E3779B1u;

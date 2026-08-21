@@ -2,17 +2,18 @@
 
 A minimal Java library for LZ4 block and frame compression.
 
-It is built on top of [LaurentChardon/lz4](https://github.com/LaurentChardon/lz4), a public-domain
-single-file C implementation of LZ4.  The Java compressor and decompressor are direct ports of that
+It is built on top of [LaurentChardon/lz4](https://github.com/LaurentChardon/lz4), a public-domain C implementation of LZ4, with added optimizations.  The Java compressor and decompressor are direct ports of that
 C code, so both sides use exactly the same algorithm.
+
+The aim is to have a tiny library that is reasonably fast, with native implementations
+on modern Macs and Linux amd64 machines, and a good fall back.
 
 ## Relationship to lz4-java
 
 [lz4-java](https://github.com/lz4/lz4-java) (and its excellent fork [yawkat/lz4-java](https://github.com/yawkat/lz4-java))
-were the direct inspiration for femtolz4.  If raw throughput is your priority, use lz4-java — it is
+were the direct inspiration for femtolz4.  If raw throughput is your priority, use lz4-java: it is
 faster, battle-tested, and supports more platforms.  femtolz4 is for projects where **simplicity and
-small footprint matter more than peak speed**: tools, agents, diagnostics, or anything where you want
-to understand every line of the compression code.
+small footprint matter more than peak speed**: tools, agents and diagnostics.
 
 | | lz4-java | femtolz4 |
 |---|:---:|:---:|
@@ -40,6 +41,9 @@ try (var out = new LZ4FrameOutputStream(Files.newOutputStream(path))) {
 try (var in = new LZ4FrameInputStream(Files.newInputStream(path))) {
     byte[] data = in.readAllBytes();
 }
+
+// Standalone xxHash-32 (seed=0), no dependencies
+int hash = XXHash32.hash(data, 0, data.length);
 ```
 
 ## CLI
@@ -53,7 +57,7 @@ java -jar femtolz4.jar decompress <input.lz4> <output>
 
 ## Building
 
-Requirements: JDK 11+, Maven 3.6+.
+Requirements: JDK 17+, Maven 3.6+.
 
 ```bash
 mvn package

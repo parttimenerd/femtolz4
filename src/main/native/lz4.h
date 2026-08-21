@@ -3,7 +3,13 @@
 
 #include <stdint.h>
 
-/* femtolz4 only ships little-endian native builds (darwin-aarch64, linux-amd64). */
+/*
+ * femtolz4 only ships little-endian native builds (darwin-aarch64, linux-amd64).
+ *
+ * Spec references:
+ *   LZ4 block format: https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md
+ *   LZ4 frame format: https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
+ */
 #define LZ4_MAGIC 0x184C2102
 
 #define BLOCK_SIZE  (1024 * 256)
@@ -14,12 +20,14 @@
 #define LZ4_HASH_BITS 13
 #define LZ4_HASH_SIZE (1 << LZ4_HASH_BITS)
 
-/* Fast-path (chain=1) hash table: 12-bit, uint16_t[4096] = 8 KB.
-   Stores low 16 bits of position (delta); full position recovered as
-   sv = (pos & ~0xFFFF) | htab[h]; if (sv >= pos) sv -= 0x10000. */
+/* Fast-path (chain=1) hash table: 12-bit, uint32_t[4096] = 16 KB.
+   Each slot: bits[31:16] = generation tag, bits[15:0] = low 16 bits of position.
+   Valid iff (slot >> 16) == gen.  Position recovered as:
+     sv = (pos & ~0xFFFF) | (slot & 0xFFFF); if (sv >= pos) sv -= 0x10000.
+   Generation counter avoids memset on every call. */
 #define LZ4_HASH_BITS_FAST 12
 #define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
-#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint16_t))
+#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint32_t))
 
 typedef struct {
     int head[LZ4_HASH_SIZE];
@@ -47,7 +55,7 @@ int lz4_compress(const uint8_t *src, uint8_t *dst,
  * first call; it need not be reset between independent blocks.
  */
 int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
-                      int src_len, uint16_t *htab);
+                      int src_len, uint32_t *htab, uint16_t gen);
 
 /* ── Standard LZ4 frame format ─────────────────────────────────────────── */
 
