@@ -293,7 +293,7 @@ public final class LZ4 {
                             while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
                             dst[op++] = (byte) rem;
                         }
-                        if (litLen > 0) { System.arraycopy(src, litStart, dst, op, litLen); op += litLen; }
+                        if (litLen > 0) { op = copyLiterals(src, litStart, dst, op, litLen); }
                         dst[op++] = (byte) matchDist;
                         dst[op++] = (byte) (matchDist >>> 8);
                         if (matchExtra >= 15) {
@@ -325,8 +325,7 @@ public final class LZ4 {
                 while (rem >= 255) { dst[op++] = (byte) 255; rem -= 255; }
                 dst[op++] = (byte) rem;
             }
-            System.arraycopy(src, litStart, dst, op, litLen);
-            op += litLen;
+            op = copyLiterals(src, litStart, dst, op, litLen);
         }
         return op - dstOff;
     }
@@ -468,6 +467,39 @@ public final class LZ4 {
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /**
+     * Copy litLen bytes from src[srcPos] to dst[dstPos], returning dstPos+litLen.
+     * For small copies, uses overlapping 8-byte VarHandle stores which the JIT
+     * lowers to a couple of 64-bit stores — cheaper than the arraycopy intrinsic
+     * setup cost for sizes ≤ 32.
+     */
+    private static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
+        if (litLen <= 32) {
+            if (litLen >= 16) {
+                // Write first 16 bytes
+                LONG_LE.set(dst, dstPos,     (long) LONG_LE.get(src, srcPos));
+                LONG_LE.set(dst, dstPos + 8, (long) LONG_LE.get(src, srcPos + 8));
+                // Write last 16 bytes overlapping if needed
+                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
+                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
+            } else if (litLen >= 8) {
+                LONG_LE.set(dst, dstPos,                 (long) LONG_LE.get(src, srcPos));
+                LONG_LE.set(dst, dstPos + litLen - 8, (long) LONG_LE.get(src, srcPos + litLen - 8));
+            } else {
+                // 1-7 bytes: write first 4, then last 4 overlapping (or fewer for tiny)
+                if (litLen >= 4) {
+                    INT_LE.set(dst, dstPos,              (int) INT_LE.get(src, srcPos));
+                    INT_LE.set(dst, dstPos + litLen - 4, (int) INT_LE.get(src, srcPos + litLen - 4));
+                } else {
+                    for (int i = 0; i < litLen; i++) dst[dstPos + i] = src[srcPos + i];
+                }
+            }
+        } else {
+            System.arraycopy(src, srcPos, dst, dstPos, litLen);
+        }
+        return dstPos + litLen;
+    }
 
     private static int emitSequence(byte[] src, int litStart, int litLen,
                                     int matchExtra, int matchDist,
