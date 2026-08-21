@@ -104,55 +104,17 @@ public final class LZ4 {
             int matchDist = 0;
 
             if (pos <= safeEnd - 2) {  // need 2 bytes slack for hash5's 5th byte
-                int maxMatch  = safeEnd - pos;
-                int limit     = pos - WINDOW_SIZE;
-                int chainLeft = maxChain;
-                int h         = hash5(src, pos);
-                // Insert pos first so we walk from the second chain entry (single hash).
-                tail[pos & WINDOW_MASK] = head[h];
-                head[h] = pos;
-
-                for (int sv = tail[pos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
-                    if (get4(src, sv) != get4(src, pos)
-                            || src[sv + matchLen] != src[pos + matchLen]) {
-                        if (--chainLeft == 0) break;
-                        continue;
-                    }
-                    int len = extend(src, sv, pos, maxMatch);
-                    if (len > matchLen) {
-                        matchLen  = len;
-                        matchDist = pos - sv;
-                        if (len == maxMatch) break;
-                    }
-                    if (--chainLeft == 0) break;
-                }
+                long r = insertAndMatch(head, tail, src, pos, safeEnd - pos, maxChain);
+                matchLen  = (int) (r >>> 32);
+                matchDist = (int) r;
             }
 
             // Lazy matching: only at maxChain>1 (ratio mode).
             if (matchLen >= MIN_MATCH && pos <= safeEnd - 3) {
-                int lazyLen  = 0;
-                int lazyDist = 0;
-                int lazyPos  = pos + 1;
-                int maxMatch = safeEnd - lazyPos;
-                int limit    = lazyPos - WINDOW_SIZE;
-                int chainLeft = maxChain;
-                int h        = hash5(src, lazyPos);
-                tail[lazyPos & WINDOW_MASK] = head[h];
-                head[h] = lazyPos;
-                for (int sv = tail[lazyPos & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
-                    if (get4(src, sv) != get4(src, lazyPos)
-                            || src[sv + lazyLen] != src[lazyPos + lazyLen]) {
-                        if (--chainLeft == 0) break;
-                        continue;
-                    }
-                    int len = extend(src, sv, lazyPos, maxMatch);
-                    if (len > lazyLen) {
-                        lazyLen  = len;
-                        lazyDist = lazyPos - sv;
-                        if (len == maxMatch) break;
-                    }
-                    if (--chainLeft == 0) break;
-                }
+                int lazyPos = pos + 1;
+                long r = insertAndMatch(head, tail, src, lazyPos, safeEnd - lazyPos, maxChain);
+                int lazyLen  = (int) (r >>> 32);
+                int lazyDist = (int) r;
                 if (lazyLen > matchLen) {
                     pos++;
                     matchLen  = lazyLen;
@@ -183,8 +145,9 @@ public final class LZ4 {
     }
 
     /**
-     * chain=1 fast path using an int[] hash table (16 KB).
+     * chain=1 fast path using a thread-local int[] hash table.
      * Stores full positions; no 16-bit recovery overhead.
+     * extend() is inlined here to avoid call-depth JIT deopt.
      */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
@@ -207,9 +170,17 @@ public final class LZ4 {
                 int h     = hash4(src, pos);
                 int sv    = head[h];
                 head[h]   = pos;
-                if (sv > limit
-                        && get4(src, sv) == get4(src, pos)) {
-                    matchLen  = extend(src, sv, pos, safeEnd - pos);
+                if (sv > limit && get4(src, sv) == get4(src, pos)) {
+                    /* Inlined extend(): word-at-a-time match extension. */
+                    int maxMatch = safeEnd - pos;
+                    int len = MIN_MATCH;
+                    while (len + 8 <= maxMatch) {
+                        long diff = getLong(src, sv + len) ^ getLong(src, pos + len);
+                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                        len += 8;
+                    }
+                    while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
+                    matchLen  = len;
                     matchDist = pos - sv;
                 }
             }
@@ -219,15 +190,9 @@ public final class LZ4 {
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
-                int matchEnd = pos + matchLen;
-                litStart = matchEnd;
-                int insertFrom = pos + 1;
-                int insertEnd  = matchEnd < safeEnd2 ? matchEnd : safeEnd2 + 1;
-                while (insertFrom < insertEnd) {
-                    head[hash4(src, insertFrom)] = insertFrom;
-                    insertFrom += 2;
-                }
-                pos = matchEnd;
+                litStart = pos + matchLen;
+                pos      = litStart;
+                prefetch(src, pos + 64);
             } else {
                 int step = (skip >> 6) + 1;
                 pos += step;
@@ -374,6 +339,41 @@ public final class LZ4 {
         int h = hash5(src, pos);
         tail[pos & WINDOW_MASK] = head[h];
         head[h] = pos;
+    }
+
+    /**
+     * Insert {@code position} into the hash chain and find its best match in
+     * one pass (single hash computation). Mirrors the native
+     * {@code lz4__insert_and_match} helper.
+     *
+     * @return {@code (matchLen << 32) | (matchDist & 0xFFFFFFFFL)}; matchLen is 0 if no match found
+     */
+    private static long insertAndMatch(int[] head, int[] tail, byte[] src,
+                                        int position, int maxMatch, int maxChain) {
+        int limit     = position - WINDOW_SIZE;
+        int chainLeft = maxChain;
+        int h         = hash5(src, position);
+        // Insert position first so we walk from the second chain entry (single hash).
+        tail[position & WINDOW_MASK] = head[h];
+        head[h] = position;
+
+        int bestLen  = 0;
+        int bestDist = 0;
+        for (int sv = tail[position & WINDOW_MASK]; sv > limit; sv = tail[sv & WINDOW_MASK]) {
+            if (get4(src, sv) != get4(src, position)
+                    || src[sv + bestLen] != src[position + bestLen]) {
+                if (--chainLeft == 0) break;
+                continue;
+            }
+            int len = extend(src, sv, position, maxMatch);
+            if (len > bestLen) {
+                bestLen  = len;
+                bestDist = position - sv;
+                if (len == maxMatch) break;
+            }
+            if (--chainLeft == 0) break;
+        }
+        return ((long) bestLen << 32) | (bestDist & 0xFFFFFFFFL);
     }
 
     private static int extend(byte[] src, int sv, int pos, int maxMatch) {

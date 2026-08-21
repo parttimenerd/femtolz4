@@ -3,22 +3,8 @@
 
 #include <stdint.h>
 
-#if defined __BYTE_ORDER__ && defined __ORDER_LITTLE_ENDIAN__ && \
-    __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-#  define LZ4_LITTLE_ENDIAN
-#endif
-
-#ifdef LZ4_LITTLE_ENDIAN
-#  define LZ4_MAGIC 0x184C2102
-#else
-#  define LZ4_MAGIC 0x02214C18
-#endif
-
-#define SWAP32(x) ((uint32_t)(          \
-    (((x) & 0xFF000000u) >> 24) |       \
-    (((x) & 0x00FF0000u) >>  8) |       \
-    (((x) & 0x0000FF00u) <<  8) |       \
-    (((x) & 0x000000FFu) << 24) ))
+/* femtolz4 only ships little-endian native builds (darwin-aarch64, linux-amd64). */
+#define LZ4_MAGIC 0x184C2102
 
 #define BLOCK_SIZE  (1024 * 256)
 #define EXCESS      (16 + (BLOCK_SIZE / 255))
@@ -28,11 +14,12 @@
 #define LZ4_HASH_BITS 13
 #define LZ4_HASH_SIZE (1 << LZ4_HASH_BITS)
 
-/* Fast-path (chain=1) hash table: 12-bit, int[4096] = 16 KB.
-   Stores full 32-bit positions; no position-recovery overhead. */
+/* Fast-path (chain=1) hash table: 12-bit, uint16_t[4096] = 8 KB.
+   Stores low 16 bits of position (delta); full position recovered as
+   sv = (pos & ~0xFFFF) | htab[h]; if (sv >= pos) sv -= 0x10000. */
 #define LZ4_HASH_BITS_FAST 12
 #define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
-#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(int))
+#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint16_t))
 
 typedef struct {
     int head[LZ4_HASH_SIZE];
@@ -55,12 +42,12 @@ int lz4_compress(const uint8_t *src, uint8_t *dst,
                  int src_len, int max_chain);
 
 /*
- * chain=1 fast-path: uses a caller-provided int[LZ4_HASH_SIZE_FAST] table
- * (16 KB), storing full 32-bit positions.  Table must be filled with -1
- * before the first call; it need not be reset between independent blocks.
+ * chain=1 fast-path: uses a caller-provided uint16_t[LZ4_HASH_SIZE_FAST] table
+ * (8 KB), storing low 16 bits of position.  Table must be zeroed before the
+ * first call; it need not be reset between independent blocks.
  */
 int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
-                      int src_len, int *htab);
+                      int src_len, uint16_t *htab);
 
 /* ── Standard LZ4 frame format ─────────────────────────────────────────── */
 

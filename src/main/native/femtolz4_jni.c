@@ -15,19 +15,17 @@
 
 /* ── Thread-local compress state ─────────────────────────────────────────── */
 
-/* chain=1 fast path: 16 KB int table, filled with -1 once at thread-init time.
-   Cross-block references are bounded by the 64 KB window so no reset needed. */
-static _Thread_local int *tl_htab = NULL;
+/* chain=1 fast path: 8 KB uint16_t table storing low-16 position deltas.
+   Zeroed once at thread-init time; no reset needed between blocks. */
+static _Thread_local uint16_t *tl_htab = NULL;
 
 /* chain≥2: full stream (head[] + tail[]), reset (memset head[]) each call. */
 static _Thread_local lz4_stream_t *tl_stream = NULL;
 
-static int *get_htab(void)
+static uint16_t *get_htab(void)
 {
     if (!tl_htab) {
-        tl_htab = (int *)malloc(LZ4_HASH_SIZE_FAST * sizeof(int));
-        if (tl_htab)
-            memset(tl_htab, 0xFF, LZ4_HASH_SIZE_FAST * sizeof(int)); /* fill with -1 */
+        tl_htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
     }
     return tl_htab;
 }
@@ -165,10 +163,9 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
     jbyte *dst = (*env)->GetPrimitiveArrayCritical(env, jDst, NULL);
     int result;
     if (max_chain == 1) {
-        /* chain=1: 16 KB int fast table, reset each call for cross-block safety. */
-        int *htab = get_htab();
+        uint16_t *htab = get_htab();
         if (!htab) { result = 0; goto done; }
-        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(int));
+        memset(htab, 0, LZ4_HASH_SIZE_FAST * sizeof(uint16_t));
         result = lz4_compress_fast(
                             (const uint8_t *)(src + src_off),
                             (uint8_t *)(dst + dst_off),

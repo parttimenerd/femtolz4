@@ -70,9 +70,8 @@ static int run_roundtrip(const uint8_t *src, int src_len, int max_chain, const c
 
     int comp_len;
     if (max_chain == 1) {
-        int *htab = (int *)malloc(LZ4_HASH_SIZE_FAST * sizeof(int));
+        uint16_t *htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
         if (!htab) { free(comp); free(decomp); return -99; }
-        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(int));
         comp_len = lz4_compress_fast(src, comp, src_len, htab);
         free(htab);
     } else {
@@ -173,8 +172,7 @@ int main(void) {
     /* ── Truncated valid compressed data ── */
     fill_random(buf, 1024, &seed);
     {
-        int *htab = (int *)malloc(LZ4_HASH_SIZE_FAST * sizeof(int));
-        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(int));
+        uint16_t *htab = (uint16_t *)calloc(LZ4_HASH_SIZE_FAST, sizeof(uint16_t));
         int clen = lz4_compress_fast(buf, buf2, 1024, htab);
         free(htab);
         for (int trunc = 1; trunc < clen; trunc += (clen / 20) + 1) {
