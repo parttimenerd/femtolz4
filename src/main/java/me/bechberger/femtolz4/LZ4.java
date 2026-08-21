@@ -118,84 +118,79 @@ public final class LZ4 {
         int pos      = srcOff;
         int srcEnd   = srcOff + srcLen;
         int safeEnd  = srcEnd - PADDING;
+        int safeMain = safeEnd - 1; // pos must be <= safeMain to safely read 5 bytes + do lazy at pos+1
 
-        while (pos < srcEnd) {
-            int matchLen  = 0;
-            int matchDist = 0;
+        while (pos <= safeMain) {
+            int pos4 = (int) INT_LE.get(src, pos);
+            int v    = pos4 ^ ((src[pos + 4] & 0xFF) << 24);
+            int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
+            int limit     = pos - WINDOW_SIZE;
+            int chainLeft = maxChain;
+            int bestLen   = 0;
+            int bestDist  = 0;
 
-            if (pos <= safeEnd - 2) {
-                int pos4 = (int) INT_LE.get(src, pos);
-                int v    = pos4 ^ ((src[pos + 4] & 0xFF) << 24);
-                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
-                int limit     = pos - WINDOW_SIZE;
-                int chainLeft = maxChain;
-                int bestLen   = 0;
-                int bestDist  = 0;
+            // Insert pos first
+            int prev = head[h];
+            tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
+            head[h] = pos;
 
-                // Insert pos first
-                int prev = head[h];
-                tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
-                head[h] = pos;
+            // Walk chain from second entry
+            for (int sv = prev; sv > limit; ) {
+                long tslot = tail[sv & WINDOW_MASK];
+                int  sv4   = (int)(tslot >>> 32);
+                int  next  = (int) tslot;
 
-                // Walk from second entry
-                for (int sv = prev; sv > limit; ) {
-                    long tslot = tail[sv & WINDOW_MASK];
-                    int  sv4   = (int)(tslot >>> 32);
-                    int  next  = (int) tslot;
-
-                    if (sv4 != pos4
-                            || src[sv + bestLen] != src[pos + bestLen]) {
-                        if (--chainLeft == 0) break;
-                        sv = next;
-                        if (sv <= limit) break;
-                        continue;
-                    }
-                    int maxMatch = safeEnd - pos;
-                    int len = MIN_MATCH;
-                    while (len + 8 <= maxMatch) {
-                        long diff = (long) LONG_LE.get(src, sv + len)
-                                  ^ (long) LONG_LE.get(src, pos + len);
-                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
-                        len += 8;
-                    }
-                    while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
-                    if (len > bestLen) {
-                        bestLen = len; bestDist = pos - sv;
-                        if (len == maxMatch) break;
-                    }
+                if (sv4 != pos4 || src[sv + bestLen] != src[pos + bestLen]) {
                     if (--chainLeft == 0) break;
                     sv = next;
                     if (sv <= limit) break;
+                    continue;
                 }
-                matchLen  = bestLen;
-                matchDist = bestDist;
+                int maxMatch = safeEnd - pos;
+                int len = MIN_MATCH;
+                while (len + 8 <= maxMatch) {
+                    long diff = (long) LONG_LE.get(src, sv + len)
+                              ^ (long) LONG_LE.get(src, pos + len);
+                    if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                    len += 8;
+                }
+                while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
+                if (len > bestLen) {
+                    bestLen = len; bestDist = pos - sv;
+                    if (len == maxMatch) break;
+                }
+                if (--chainLeft == 0) break;
+                sv = next;
+                if (sv <= limit) break;
             }
 
-            // Lazy matching
-            if (matchLen >= MIN_MATCH && pos <= safeEnd - 3) {
+            int matchLen  = bestLen;
+            int matchDist = bestDist;
+
+            // Lazy matching: try pos+1 if it might do better (pos+1 must also be <= safeMain)
+            if (matchLen >= MIN_MATCH && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
-                int v    = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
-                int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
-                int limit     = lp - WINDOW_SIZE;
-                int chainLeft = maxChain;
+                int lv   = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
+                int lh   = (lv * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int llimit    = lp - WINDOW_SIZE;
+                int lchainLeft = maxChain;
                 int lazyLen   = 0;
                 int lazyDist  = 0;
 
-                int prev = head[h];
-                tail[lp & WINDOW_MASK] = ((long) lp4 << 32) | (prev & 0xFFFFFFFFL);
-                head[h] = lp;
+                int lprev = head[lh];
+                tail[lp & WINDOW_MASK] = ((long) lp4 << 32) | (lprev & 0xFFFFFFFFL);
+                head[lh] = lp;
 
-                for (int sv = prev; sv > limit; ) {
+                for (int sv = lprev; sv > llimit; ) {
                     long tslot = tail[sv & WINDOW_MASK];
                     int  sv4   = (int)(tslot >>> 32);
                     int  next  = (int) tslot;
 
-                    if (sv4 != lp4
-                            || src[sv + lazyLen] != src[lp + lazyLen]) {
-                        if (--chainLeft == 0) break;
+                    if (sv4 != lp4 || src[sv + lazyLen] != src[lp + lazyLen]) {
+                        if (--lchainLeft == 0) break;
                         sv = next;
-                        if (sv <= limit) break;
+                        if (sv <= llimit) break;
                         continue;
                     }
                     int maxMatch = safeEnd - lp;
@@ -211,9 +206,9 @@ public final class LZ4 {
                         lazyLen = len; lazyDist = lp - sv;
                         if (len == maxMatch) break;
                     }
-                    if (--chainLeft == 0) break;
+                    if (--lchainLeft == 0) break;
                     sv = next;
-                    if (sv <= limit) break;
+                    if (sv <= llimit) break;
                 }
                 if (lazyLen > matchLen) {
                     pos++;
@@ -227,7 +222,6 @@ public final class LZ4 {
                 int matchExtra = matchLen - MIN_MATCH;
                 op = emitSequence(src, litStart, litLen, matchExtra, matchDist, dst, op);
                 litStart = pos + matchLen;
-                // Insert skipped positions (stride=1 for chain>1)
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
                 for (int ip = pos + 1; ip < insertEnd; ip++) {
                     int ip4 = (int) INT_LE.get(src, ip);
@@ -242,6 +236,8 @@ public final class LZ4 {
                 pos++;
             }
         }
+        // pos is now past safeMain — just advance to srcEnd (tail bytes become literals)
+        if (pos < srcEnd) pos = srcEnd;
 
         int litLen = srcEnd - litStart;
         if (litLen > 0) op = emitSequence(src, litStart, litLen, 0, 0, dst, op);
