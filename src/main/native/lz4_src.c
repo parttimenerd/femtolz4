@@ -384,7 +384,7 @@ HOT int lz4_compress_block(lz4_stream_t *s,
                 lz4__emit_match_overflow(dst, &op, match_extra);
                 lit_start = pos + match_len;
                 int insert_end = lit_start < safe_end + 1 ? lit_start : safe_end + 1;
-                for (int ip = pos + 1; ip < insert_end; ip++)
+                for (int ip = pos + 1; ip < insert_end; ip += 2)
                     lz4__insert(s, src, ip);
                 pos = lit_start;
             } else {

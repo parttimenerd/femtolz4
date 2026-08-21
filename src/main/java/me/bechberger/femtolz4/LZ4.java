@@ -100,7 +100,7 @@ public final class LZ4 {
      *   bits[31:0]  = nextPos as signed int (NIL sentinel when head[h]=NIL)
      *
      * On every chain walk step we only load tail[sv & MASK] — one 64-bit
-     * L2-resident read — instead of also loading src[sv] (random L3 miss).
+     * load — instead of also loading src[sv] (random L3 miss).
      */
     private static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff, int maxChain) {
@@ -118,7 +118,7 @@ public final class LZ4 {
         int pos      = srcOff;
         int srcEnd   = srcOff + srcLen;
         int safeEnd  = srcEnd - PADDING;
-        int safeMain = safeEnd - 1; // pos must be <= safeMain to safely read 5 bytes + do lazy at pos+1
+        int safeMain = safeEnd - 1;
 
         while (pos <= safeMain) {
             int pos4 = (int) INT_LE.get(src, pos);
@@ -167,7 +167,7 @@ public final class LZ4 {
             int matchLen  = bestLen;
             int matchDist = bestDist;
 
-            // Lazy matching: try pos+1 if it might do better (pos+1 must also be <= safeMain)
+            // Lazy matching: try pos+1 if it might do better
             if (matchLen >= MIN_MATCH && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
@@ -250,7 +250,7 @@ public final class LZ4 {
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
-                for (int ip = pos + 1; ip < insertEnd; ip++) {
+                for (int ip = pos + 1; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int v2  = ip4 ^ ((src[ip + 4] & 0xFF) << 24);
                     int h2  = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
