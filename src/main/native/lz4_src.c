@@ -11,6 +11,9 @@
 #ifdef __SSE2__
 #  include <emmintrin.h>
 #endif
+#ifdef __AVX2__
+#  include <immintrin.h>
+#endif
 
 /*
  * LZ4 frame format  https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
@@ -438,6 +441,22 @@ int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
                             else          len += 12 + (__builtin_ctz(ne3) >> 3);
                             goto cf_done;
                         }
+                        len += 16;
+                    }
+#elif defined(__AVX2__)
+                    while (len + 32 <= max_match) {
+                        __m256i sv32  = _mm256_loadu_si256((const __m256i *)(src + sv  + len));
+                        __m256i pos32 = _mm256_loadu_si256((const __m256i *)(src + pos + len));
+                        uint32_t mask = (uint32_t)_mm256_movemask_epi8(
+                                            _mm256_cmpeq_epi8(sv32, pos32));
+                        if (mask != 0xFFFFFFFFu) { len += __builtin_ctz(~mask); goto cf_done; }
+                        len += 32;
+                    }
+                    while (len + 16 <= max_match) {
+                        __m128i sv16  = _mm_loadu_si128((const __m128i *)(src + sv  + len));
+                        __m128i pos16 = _mm_loadu_si128((const __m128i *)(src + pos + len));
+                        int mask16 = _mm_movemask_epi8(_mm_cmpeq_epi8(sv16, pos16));
+                        if (mask16 != 0xFFFF) { len += __builtin_ctz(~mask16); goto cf_done; }
                         len += 16;
                     }
 #elif defined(__SSE2__)
