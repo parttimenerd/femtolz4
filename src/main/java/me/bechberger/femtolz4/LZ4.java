@@ -18,7 +18,7 @@ public final class LZ4 {
 
     static final int WINDOW_SIZE = 1 << 16;
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
-    private static final int HASH_BITS      = 13;
+    private static final int HASH_BITS      = 16;
     private static final int HASH_SIZE      = 1 << HASH_BITS;
     private static final int HASH_BITS_FAST = 13;
     private static final int HASH_SIZE_FAST = 1 << HASH_BITS_FAST;
@@ -140,7 +140,7 @@ public final class LZ4 {
                 int  sv4   = (int)(tslot >>> 32);
                 int  next  = (int) tslot;
 
-                if (sv4 != pos4 || src[sv + bestLen] != src[pos + bestLen]) {
+                if (sv4 != pos4 || (bestLen > 0 && src[sv + bestLen] != src[pos + bestLen])) {
                     if (--chainLeft == 0) break;
                     sv = next;
                     if (sv <= limit) break;
@@ -168,6 +168,7 @@ public final class LZ4 {
             int matchDist = bestDist;
 
             // Lazy matching: try pos+1 if it might do better
+            boolean lazyProbed = false;
             if (matchLen >= MIN_MATCH && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
@@ -181,6 +182,7 @@ public final class LZ4 {
                 int lprev = head[lh];
                 tail[lp & WINDOW_MASK] = ((long) lp4 << 32) | (lprev & 0xFFFFFFFFL);
                 head[lh] = lp;
+                lazyProbed = true;
 
                 for (int sv = lprev; sv > llimit; ) {
                     long tslot = tail[sv & WINDOW_MASK];
@@ -212,6 +214,7 @@ public final class LZ4 {
                 }
                 if (lazyLen > matchLen) {
                     pos++;
+                    lazyProbed = false;  // lazy won: pos advanced, insert loop starts normally
                     matchLen  = lazyLen;
                     matchDist = lazyDist;
                 }
@@ -250,7 +253,10 @@ public final class LZ4 {
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
-                for (int ip = pos + 1; ip < insertEnd; ip += 2) {
+                // If lazy probed but lost, pos+1 was already inserted; start at pos+3
+                // to avoid reinserting it (which can create a self-link in the chain).
+                int insertStart = pos + 1 + (lazyProbed ? 2 : 0);
+                for (int ip = insertStart; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int v2  = ip4 ^ ((src[ip + 4] & 0xFF) << 24);
                     int h2  = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
@@ -458,9 +464,27 @@ public final class LZ4 {
             }
             if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
             if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
-            System.arraycopy(src, ip, dst, op, (int) litLen);
-            ip += (int) litLen;
-            op += (int) litLen;
+            int iLitLen = (int) litLen;
+            if (iLitLen <= 32) {
+                if (iLitLen >= 16) {
+                    LONG_LE.set(dst, op,              (long) LONG_LE.get(src, ip));
+                    LONG_LE.set(dst, op + 8,          (long) LONG_LE.get(src, ip + 8));
+                    LONG_LE.set(dst, op + iLitLen - 16, (long) LONG_LE.get(src, ip + iLitLen - 16));
+                    LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
+                } else if (iLitLen >= 8) {
+                    LONG_LE.set(dst, op,                (long) LONG_LE.get(src, ip));
+                    LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
+                } else if (iLitLen >= 4) {
+                    INT_LE.set(dst, op,                (int) INT_LE.get(src, ip));
+                    INT_LE.set(dst, op + iLitLen - 4,  (int) INT_LE.get(src, ip + iLitLen - 4));
+                } else {
+                    for (int ci = 0; ci < iLitLen; ci++) dst[op + ci] = src[ip + ci];
+                }
+            } else {
+                System.arraycopy(src, ip, dst, op, iLitLen);
+            }
+            ip += iLitLen;
+            op += iLitLen;
 
             if (ip >= srcEnd) break; // last sequence has no match
 
@@ -482,8 +506,30 @@ public final class LZ4 {
             int matchSrc = op - offset;
             if (matchSrc < matchLowerBound) throw new LZ4Exception("match before buffer start");
             if ((long) op + matchLen > dstEnd) throw new LZ4Exception("output overflow in match");
-            copyMatch(dst, matchSrc, op, (int) matchLen);
-            op += (int) matchLen;
+            int iMatchLen = (int) matchLen;
+            if (offset >= iMatchLen) {
+                if (iMatchLen <= 32) {
+                    if (iMatchLen >= 16) {
+                        LONG_LE.set(dst, op,               (long) LONG_LE.get(dst, matchSrc));
+                        LONG_LE.set(dst, op + 8,           (long) LONG_LE.get(dst, matchSrc + 8));
+                        LONG_LE.set(dst, op + iMatchLen - 16, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 16));
+                        LONG_LE.set(dst, op + iMatchLen - 8,  (long) LONG_LE.get(dst, matchSrc + iMatchLen - 8));
+                    } else if (iMatchLen >= 8) {
+                        LONG_LE.set(dst, op,                 (long) LONG_LE.get(dst, matchSrc));
+                        LONG_LE.set(dst, op + iMatchLen - 8, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 8));
+                    } else if (iMatchLen >= 4) {
+                        INT_LE.set(dst, op,                 (int) INT_LE.get(dst, matchSrc));
+                        INT_LE.set(dst, op + iMatchLen - 4, (int) INT_LE.get(dst, matchSrc + iMatchLen - 4));
+                    } else {
+                        for (int ci = 0; ci < iMatchLen; ci++) dst[op + ci] = dst[matchSrc + ci];
+                    }
+                } else {
+                    System.arraycopy(dst, matchSrc, dst, op, iMatchLen);
+                }
+            } else {
+                copyMatch(dst, matchSrc, op, iMatchLen);
+            }
+            op += iMatchLen;
         }
         return op - dstOff;
     }
