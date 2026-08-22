@@ -521,8 +521,17 @@ public final class LZ4 {
             if ((long) op + matchLen > dstEnd) throw new LZ4Exception("output overflow in match");
             int iMatchLen = (int) matchLen;
             if (offset >= iMatchLen) {
-                if (iMatchLen <= 32) {
-                    if (iMatchLen >= 16) {
+                if (iMatchLen <= 64) {
+                    if (iMatchLen >= 32) {
+                        LONG_LE.set(dst, op,               (long) LONG_LE.get(dst, matchSrc));
+                        LONG_LE.set(dst, op + 8,           (long) LONG_LE.get(dst, matchSrc + 8));
+                        LONG_LE.set(dst, op + 16,          (long) LONG_LE.get(dst, matchSrc + 16));
+                        LONG_LE.set(dst, op + 24,          (long) LONG_LE.get(dst, matchSrc + 24));
+                        LONG_LE.set(dst, op + iMatchLen - 32, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 32));
+                        LONG_LE.set(dst, op + iMatchLen - 24, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 24));
+                        LONG_LE.set(dst, op + iMatchLen - 16, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 16));
+                        LONG_LE.set(dst, op + iMatchLen - 8,  (long) LONG_LE.get(dst, matchSrc + iMatchLen - 8));
+                    } else if (iMatchLen >= 16) {
                         LONG_LE.set(dst, op,               (long) LONG_LE.get(dst, matchSrc));
                         LONG_LE.set(dst, op + 8,           (long) LONG_LE.get(dst, matchSrc + 8));
                         LONG_LE.set(dst, op + iMatchLen - 16, (long) LONG_LE.get(dst, matchSrc + iMatchLen - 16));
@@ -569,24 +578,29 @@ public final class LZ4 {
 
     /**
      * Copy litLen bytes from src[srcPos] to dst[dstPos], returning dstPos+litLen.
-     * For small copies, uses overlapping 8-byte VarHandle stores which the JIT
-     * lowers to a couple of 64-bit stores — cheaper than the arraycopy intrinsic
-     * setup cost for sizes ≤ 32.
+     * Uses overlapping 8-byte VarHandle stores for sizes ≤ 64 — avoids arraycopy
+     * intrinsic overhead for common literal run sizes.
      */
     private static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
-        if (litLen <= 32) {
-            if (litLen >= 16) {
-                // Write first 16 bytes
+        if (litLen <= 64) {
+            if (litLen >= 32) {
+                LONG_LE.set(dst, dstPos,      (long) LONG_LE.get(src, srcPos));
+                LONG_LE.set(dst, dstPos + 8,  (long) LONG_LE.get(src, srcPos + 8));
+                LONG_LE.set(dst, dstPos + 16, (long) LONG_LE.get(src, srcPos + 16));
+                LONG_LE.set(dst, dstPos + 24, (long) LONG_LE.get(src, srcPos + 24));
+                LONG_LE.set(dst, dstPos + litLen - 32, (long) LONG_LE.get(src, srcPos + litLen - 32));
+                LONG_LE.set(dst, dstPos + litLen - 24, (long) LONG_LE.get(src, srcPos + litLen - 24));
+                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
+                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
+            } else if (litLen >= 16) {
                 LONG_LE.set(dst, dstPos,     (long) LONG_LE.get(src, srcPos));
                 LONG_LE.set(dst, dstPos + 8, (long) LONG_LE.get(src, srcPos + 8));
-                // Write last 16 bytes overlapping if needed
                 LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
                 LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
             } else if (litLen >= 8) {
                 LONG_LE.set(dst, dstPos,                 (long) LONG_LE.get(src, srcPos));
                 LONG_LE.set(dst, dstPos + litLen - 8, (long) LONG_LE.get(src, srcPos + litLen - 8));
             } else {
-                // 1-7 bytes: write first 4, then last 4 overlapping (or fewer for tiny)
                 if (litLen >= 4) {
                     INT_LE.set(dst, dstPos,              (int) INT_LE.get(src, srcPos));
                     INT_LE.set(dst, dstPos + litLen - 4, (int) INT_LE.get(src, srcPos + litLen - 4));
@@ -623,17 +637,29 @@ public final class LZ4 {
     /** Copy match bytes, handling overlap (offset < matchLen). */
     private static void copyMatch(byte[] buf, int src, int dst, int len) {
         int offset = dst - src;
-        if (offset >= len) {
-            System.arraycopy(buf, src, buf, dst, len);
-        } else if (offset == 1) {
+        if (offset == 1) {
             Arrays.fill(buf, dst, dst + len, buf[src]);
+        } else if (offset == 2) {
+            /* Broadcast 2-byte pattern: replicate via 8-byte stores. */
+            int s0 = buf[src] & 0xFF, s1 = buf[src + 1] & 0xFF;
+            long v2 = s0 | (s1 << 8);
+            long pattern = v2 | (v2 << 16) | (v2 << 32) | (v2 << 48);
+            int d = dst, end = dst + len;
+            while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
+            while (d < end) { buf[d] = buf[d - offset]; d++; }
+        } else if (offset == 4) {
+            /* Broadcast 4-byte pattern. */
+            long v4 = (int) INT_LE.get(buf, src) & 0xFFFFFFFFL;
+            long pattern = v4 | (v4 << 32);
+            int d = dst, end = dst + len;
+            while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
+            while (d < end) { buf[d] = buf[d - offset]; d++; }
         } else {
-            int i = 0;
-            while (i + offset <= len) {
-                System.arraycopy(buf, src + i, buf, dst + i, offset);
-                i += offset;
-            }
-            if (i < len) System.arraycopy(buf, src + i, buf, dst + i, len - i);
+            /* General case: advance src in lockstep with dst (copies repeat the
+               pattern naturally — after one stride, src points at already-written
+               output, which is the same pattern repeated). */
+            int d = dst, end = dst + len;
+            while (d < end) { buf[d++] = buf[src++]; }
         }
     }
 
