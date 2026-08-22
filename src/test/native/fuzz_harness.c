@@ -80,7 +80,7 @@ static int run_roundtrip(const uint8_t *src, int src_len, int max_chain, const c
     } else {
         lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
         if (!s) { free(comp); free(decomp); return -99; }
-        lz4_init(s);
+        memset(s, 0xff, sizeof(*s));
         comp_len = lz4_compress_block(s, src, comp, src_len, max_chain);
         free(s);
     }

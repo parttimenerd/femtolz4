@@ -25,7 +25,6 @@
  */
 
 /* Left-rotate a 32-bit value.  Compilers emit a single ROL instruction. */
-#define ROTL32(x, r)   (((x) << (r)) | ((x) >> (32 - (r))))
 
 #define PADDING_LITERALS 5
 #define WINDOW_MASK      (WINDOW_SIZE - 1)
@@ -98,14 +97,6 @@ FORCE_INLINE uint32_t lz4__hash(const uint8_t *p)
     memcpy(&v, p, 4);
     v ^= (uint32_t)p[4] << 24;
     return (v * 0x9E3779B9u) >> (32 - HASH_BITS);
-}
-
-/* 4-byte hash for the chain=1 fast path: one fewer load, ~2x faster. */
-FORCE_INLINE uint32_t lz4__hash4(const uint8_t *p)
-{
-    uint32_t v;
-    memcpy(&v, p, 4);
-    return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
 }
 
 /* Compute hash directly from an already-loaded uint32_t value. */
@@ -181,38 +172,6 @@ FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_
     return len;
 }
 
-/*
- * Fast-path for max_chain==1: flat hash table (head[] only, no tail[]).
- * Uses the full 13-bit / 5-byte hash to keep match quality.
- */
-FORCE_INLINE int lz4__flat_match(lz4_stream_t *s, const uint8_t *src,
-                            int pos, int src_len, int *out_dist)
-{
-    int max_match = (src_len - PADDING_LITERALS) - pos;
-    if (max_match < MIN_MATCH) {
-        if (pos + 5 <= src_len) s->head[lz4__hash(src + pos)] = pos;
-        return 0;
-    }
-
-    int      limit = MAX(pos - WINDOW_SIZE, NIL);
-    uint32_t h     = lz4__hash(src + pos);
-    uint32_t pos4;
-    memcpy(&pos4, src + pos, 4);
-
-    int sv     = s->head[h];
-    s->head[h] = pos;
-
-    if (sv <= limit) { *out_dist = 0; return 0; }
-
-    uint32_t sv4;
-    memcpy(&sv4, src + sv, 4);
-    if (sv4 != pos4) { *out_dist = 0; return 0; }
-
-    int len = lz4__extend_match(src, sv, pos, max_match);
-    *out_dist = pos - sv;
-    return len;
-}
-
 /* Insert pos and find its best match in one pass (single hash computation). */
 FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
                                   int pos, int src_len, int max_chain,
@@ -258,11 +217,6 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
-void lz4_init(lz4_stream_t *s)
-{
-    memset(s, 0xff, sizeof(*s));
-}
-
 /*
  * Chain=1 fast-path using a uint64_t[LZ4_HASH_SIZE_FAST] table.
  * Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position (int32).
@@ -281,12 +235,16 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
     int lit_start = 0;
     int pos       = 0;
     int safe_end  = src_len - PADDING_LITERALS;
+    int loop_end  = safe_end - 1;          /* loop runs while pos < loop_end */
 
+    if (src_len < 4) goto emit_tail;       /* too short for any match */
+
+    {
     uint32_t pos4;
     memcpy(&pos4, src + pos, 4);
     uint32_t h = lz4__hash4v(pos4);
 
-    while (pos < safe_end - 1) {
+    while (pos < loop_end) {
         uint64_t slot = htab[h];
         htab[h]       = ((uint64_t)pos4 << 32) | (uint32_t)pos;
 
@@ -304,7 +262,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
                 lz4__emit_match_overflow(dst, &op, match_extra);
                 lit_start = pos + match_len;
                 pos = lit_start;
-                if (__builtin_expect(pos >= safe_end - 1, 0)) break;
+                if (__builtin_expect(pos >= loop_end, 0)) break;
                 memcpy(&pos4, src + pos, 4);
                 h = lz4__hash4v(pos4);
                 __builtin_prefetch(htab + h, 0, 3);
@@ -313,83 +271,72 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         }
 
         pos++;
-        if (__builtin_expect(pos >= safe_end - 1, 0)) { pos = src_len; break; }
-        memcpy(&pos4, src + pos, 4);
+        memcpy(&pos4, src + pos, 4);       /* safe: pos < loop_end < src_len - 4 */
         h = lz4__hash4v(pos4);
         __builtin_prefetch(htab + h, 0, 3);
     }
 
+    if (pos < safe_end) {
+        /* Handle the final position that the loop skipped (pos == loop_end).
+           Insert but don't match — too close to end for a safe match extension. */
+        if (pos + 5 <= src_len) {
+            memcpy(&pos4, src + pos, 4);
+            h = lz4__hash4v(pos4);
+            htab[h] = ((uint64_t)pos4 << 32) | (uint32_t)pos;
+        }
+        pos = src_len;
+    }
+    } /* end of 4-byte read block */
+
+emit_tail:
     if (lit_start != src_len)
         lz4__emit_literals(dst, &op, src, lit_start, src_len - lit_start, 0);
     return op;
 }
 
-#if defined(__x86_64__) || defined(_M_X64)
-__attribute__((target("avx2")))
-#endif
-HOT int lz4_compress_block(lz4_stream_t *s,
-                       const uint8_t *src, uint8_t *dst,
-                       int src_len, int max_chain)
+static int lz4__compress_block_chain(lz4_stream_t *s,
+                                     const uint8_t *src, uint8_t *dst,
+                                     int src_len, int max_chain)
 {
     int op        = 0;
     int lit_start = 0;
     int pos       = 0;
     int safe_end  = src_len - PADDING_LITERALS;
 
-    if (max_chain == 1) {
-        /* ── chain=1: flat hash, skip acceleration, no lazy ── */
-        int skip = 1;
-        while (pos < src_len) {
-            int match_dist = 0;
-            int match_len  = lz4__flat_match(s, src, pos, src_len, &match_dist);
+    /* ── chain>1: hash chain, lazy matching, no skip ── */
+    while (pos < src_len) {
+        int match_dist = 0;
+        int match_len  = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
 
-            if (match_len >= MIN_MATCH) {
-                skip = 1;
-                int match_extra = match_len - MIN_MATCH;
-                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
-                { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
-                op += 2;
-                lz4__emit_match_overflow(dst, &op, match_extra);
-                lit_start = pos + match_len;
-                for (int ip = pos + 1; ip < lit_start; ip += 2)
-                    s->head[lz4__hash(src + ip)] = ip;
-                pos = lit_start;
-            } else {
-                pos += (skip >> 6) + 1;
-                if (pos > src_len) pos = src_len;
-                if (skip < (17 << 6)) skip++;
+        int lazy_probed = 0;
+        if (match_len >= MIN_MATCH && pos + 1 < src_len) {
+            int lazy_dist = 0;
+            int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
+            lazy_probed = 1;
+            if (lazy_len > match_len) {
+                pos++;
+                lazy_probed = 0;  /* lazy won: pos advanced, insertion loop starts normally */
+                match_len  = lazy_len;
+                match_dist = lazy_dist;
             }
         }
-    } else {
-        /* ── chain>1: hash chain, lazy matching, no skip ── */
-        while (pos < src_len) {
-            int match_dist = 0;
-            int match_len  = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
 
-            if (match_len >= MIN_MATCH && pos + 1 < src_len) {
-                int lazy_dist = 0;
-                int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
-                if (lazy_len > match_len) {
-                    pos++;
-                    match_len  = lazy_len;
-                    match_dist = lazy_dist;
-                }
-            }
-
-            if (match_len >= MIN_MATCH) {
-                int match_extra = match_len - MIN_MATCH;
-                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
-                { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
-                op += 2;
-                lz4__emit_match_overflow(dst, &op, match_extra);
-                lit_start = pos + match_len;
-                int insert_end = lit_start < safe_end + 1 ? lit_start : safe_end + 1;
-                for (int ip = pos + 1; ip < insert_end; ip += 2)
-                    lz4__insert(s, src, ip);
-                pos = lit_start;
-            } else {
-                pos++;
-            }
+        if (match_len >= MIN_MATCH) {
+            int match_extra = match_len - MIN_MATCH;
+            lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
+            { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
+            op += 2;
+            lz4__emit_match_overflow(dst, &op, match_extra);
+            lit_start = pos + match_len;
+            int insert_end = lit_start < safe_end + 1 ? lit_start : safe_end + 1;
+            /* If lazy_probed but lost, pos+1 was already inserted; skip it to
+               avoid creating a self-link in the chain. */
+            int insert_start = pos + 1 + (lazy_probed ? 2 : 0);
+            for (int ip = insert_start; ip < insert_end; ip += 2)
+                lz4__insert(s, src, ip);
+            pos = lit_start;
+        } else {
+            pos++;
         }
     }
 
@@ -400,70 +347,54 @@ HOT int lz4_compress_block(lz4_stream_t *s,
     return op;
 }
 
+static int lz4__compress_dispatch(lz4_stream_t *s,
+                                   const uint8_t *src, uint8_t *dst,
+                                   int src_len, int max_chain,
+                                   uint64_t *htab)
+{
+    if (max_chain == 1) {
+        if (!htab) return 0;
+        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        return lz4_compress_fast(src, dst, src_len, htab);
+    }
+
+    memset(s->head, 0xff, sizeof(s->head));
+    return lz4__compress_block_chain(s, src, dst, src_len, max_chain);
+}
+
+#if defined(__x86_64__) || defined(_M_X64)
+__attribute__((target("avx2")))
+#endif
+/* General block encoder: chain=1 defers to lz4_compress_fast(), chain>1 uses
+ * the hash-chain + lazy-matching path below. */
+HOT int lz4_compress_block(lz4_stream_t *s,
+                       const uint8_t *src, uint8_t *dst,
+                       int src_len, int max_chain)
+{
+    uint64_t *htab = NULL;
+    if (max_chain == 1) {
+        htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        if (!htab) return 0;
+    }
+    int result = lz4__compress_dispatch(s, src, dst, src_len, max_chain, htab);
+    free(htab);
+    return result;
+}
+
 int lz4_compress(const uint8_t *src, uint8_t *dst, int src_len, int max_chain)
 {
     lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
     if (!s) return 0;
-    lz4_init(s);
-    int n = lz4_compress_block(s, src, dst, src_len, max_chain);
+    uint64_t *htab = NULL;
+    if (max_chain == 1) {
+        htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
+        if (!htab) {
+            free(s);
+            return 0;
+        }
+    }
+    int n = lz4__compress_dispatch(s, src, dst, src_len, max_chain, htab);
+    free(htab);
     free(s);
     return n;
-}
-
-/* ── LZ4 frame helpers ─────────────────────────────────────────────────── */
-
-/* xxHash-32 (seed=0).  Used only for the 1-byte header checksum.
- * Spec: https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md */
-static uint32_t lz4__xxhash32(const uint8_t *data, int len)
-{
-    static const uint32_t PRIME1 = 0x9E3779B1u;
-    static const uint32_t PRIME2 = 0x85EBCA77u;
-    static const uint32_t PRIME3 = 0xC2B2AE3Du;
-    static const uint32_t PRIME4 = 0x27D4EB2Fu;
-    static const uint32_t PRIME5 = 0x165667B1u;
-
-    const uint8_t *p   = data;
-    const uint8_t *end = data + len;
-    uint32_t h = (uint32_t)len + PRIME5; /* seed = 0 */
-
-    for (; p + 4 <= end; p += 4) {
-        uint32_t lane;
-        memcpy(&lane, p, 4);
-        h += lane * PRIME3;
-        h  = ROTL32(h, 17) * PRIME4;
-    }
-    for (; p < end; p++) {
-        h += (uint32_t)*p * PRIME5;
-        h  = ROTL32(h, 11) * PRIME1;
-    }
-
-    h ^= h >> 15; h *= PRIME2;
-    h ^= h >> 13; h *= PRIME3;
-    h ^= h >> 16;
-    return h;
-}
-
-int lz4_frame_write_header(uint8_t *dst)
-{
-    dst[0] = 0x04; dst[1] = 0x22; dst[2] = 0x4D; dst[3] = 0x18; /* magic */
-    dst[4] = 0x60; /* FLG */
-    dst[5] = 0x50; /* BD  */
-    dst[6] = (uint8_t)((lz4__xxhash32(dst + 4, 2) >> 8) & 0xFF); /* HC */
-    return 7;
-}
-
-int lz4_frame_block_store(uint8_t *size_field, int comp_len, int src_len)
-{
-    int      store_raw = (comp_len >= src_len);
-    uint32_t field     = store_raw
-                         ? ((uint32_t)src_len | 0x80000000u)
-                         : (uint32_t)comp_len;
-    memcpy(size_field, &field, 4);
-    return store_raw;
-}
-
-int lz4_frame_write_footer(uint8_t *dst)
-{
-    dst[0] = dst[1] = dst[2] = dst[3] = 0x00;
-    return 4;
 }
