@@ -16,7 +16,8 @@ mvn -q package -DskipTests
 
 JAR="$SCRIPT_DIR/target/femtolz4-0.1.0.jar"
 TEST_CLASSES="$SCRIPT_DIR/target/test-classes"
-YAWKAT_JAR="$(ls ~/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/*.jar 2>/dev/null | head -1)"
+YAWKAT_JAR="$(ls ~/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -1)"
+JPOUNTZ_JAR="$(find ~/.m2/repository/net/jpountz/lz4 -name '*.jar' 2>/dev/null | grep -v sources | grep -v javadoc | head -1)"
 
 if [[ -z "$YAWKAT_JAR" ]]; then
     echo "yawkat jar not found — run 'mvn test-compile' first to pull it." >&2
@@ -26,8 +27,9 @@ fi
 # ── Run benchmark ─────────────────────────────────────────────────────────────
 
 echo "Running benchmark (this takes ~30 s)..."
+CP="$TEST_CLASSES:$JAR:$YAWKAT_JAR${JPOUNTZ_JAR:+:$JPOUNTZ_JAR}"
 RAW="$(java --enable-native-access=ALL-UNNAMED \
-     -cp "$TEST_CLASSES:$JAR:$YAWKAT_JAR" \
+     -cp "$CP" \
      me.bechberger.femtolz4.Benchmark 2>/dev/null)"
 
 echo "$RAW"

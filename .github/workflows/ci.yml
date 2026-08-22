@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [main, master]
@@ -7,72 +10,47 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
 
-  # ── 1. Build darwin-aarch64 native lib ──────────────────────────────────────
-  native-darwin:
-    name: Native lib (darwin-aarch64)
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: 21
-          distribution: temurin
-
-      - name: Build darwin-aarch64 dylib
-        run: python3 build_native.py darwin-aarch64
-
-      - name: Upload dylib
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-darwin-aarch64
-          path: src/main/resources/native/darwin-aarch64/libfemtolz4.dylib
-          retention-days: 7
-
-  # ── 2. Build linux-amd64 native lib ─────────────────────────────────────────
-  native-linux:
-    name: Native lib (linux-amd64)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: 21
-          distribution: temurin
-
-      - name: Build linux-amd64 .so
-        run: python3 build_native.py linux-amd64
-
-      - name: Upload .so
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-linux-amd64
-          path: src/main/resources/native/linux-amd64/libfemtolz4.so
-          retention-days: 7
-
-  # ── 3. Test matrix ───────────────────────────────────────────────────────────
-  test:
-    name: Test — ${{ matrix.os }} / Java ${{ matrix.java }}
-    needs: [native-darwin, native-linux]
+  native-build:
+    name: Native build check (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            java: 17
-          - os: ubuntu-latest
-            java: 21
-          - os: ubuntu-latest
-            java: 25
+            target: linux-amd64
+            output: src/main/resources/native/linux-amd64/libfemtolz4.so
           - os: macos-latest
-            java: 21
+            target: darwin-aarch64
+            output: src/main/resources/native/darwin-aarch64/libfemtolz4.dylib
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+
+      - name: Build native library
+        run: python3 build_native.py ${{ matrix.target }}
+
+      - name: Verify output exists
+        run: test -f ${{ matrix.output }}
+
+  test-fast:
+    name: Fast tests (Java ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: [17, 21, 25]
     steps:
       - uses: actions/checkout@v4
 
@@ -83,26 +61,11 @@ jobs:
           distribution: temurin
           cache: maven
 
-      # Slot in freshly-built native libs so tests run against them
-      - name: Download darwin-aarch64 dylib
-        uses: actions/download-artifact@v4
-        with:
-          name: native-darwin-aarch64
-          path: src/main/resources/native/darwin-aarch64
+      - name: Run fast test suite
+        run: mvn --no-transfer-progress -Dnative.skip=true test
 
-      - name: Download linux-amd64 .so
-        uses: actions/download-artifact@v4
-        with:
-          name: native-linux-amd64
-          path: src/main/resources/native/linux-amd64
-
-      - name: Run tests
-        run: mvn --no-transfer-progress test -Dnative.skip=true
-
-  # ── 4. Package and upload JAR ────────────────────────────────────────────────
-  package:
-    name: Package JAR
-    needs: test
+  test-full:
+    name: Full tests (slow included)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -114,17 +77,22 @@ jobs:
           distribution: temurin
           cache: maven
 
-      - name: Download darwin-aarch64 dylib
-        uses: actions/download-artifact@v4
-        with:
-          name: native-darwin-aarch64
-          path: src/main/resources/native/darwin-aarch64
+      - name: Run full test suite
+        run: mvn --no-transfer-progress -Dnative.skip=true -Dtest.full=true test
 
-      - name: Download linux-amd64 .so
-        uses: actions/download-artifact@v4
+  package:
+    name: Package JAR
+    needs: [native-build, test-fast, test-full]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
         with:
-          name: native-linux-amd64
-          path: src/main/resources/native/linux-amd64
+          java-version: 21
+          distribution: temurin
+          cache: maven
 
       - name: Build JAR
         run: mvn --no-transfer-progress package -DskipTests -Dnative.skip=true
@@ -138,3 +106,33 @@ jobs:
           name: femtolz4-jar
           path: target/femtolz4-*.jar
           retention-days: 30
+
+  release-snapshot:
+    name: Refresh snapshot release
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: femtolz4-jar
+          path: dist
+
+      - name: Delete previous snapshot release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete snapshot --cleanup-tag --yes || true
+
+      - name: Create new snapshot release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          JAR=$(ls dist/femtolz4-*.jar)
+          gh release create snapshot "$JAR" \
+            --title "femtolz4 snapshot" \
+            --notes "Automated snapshot for ${GITHUB_SHA}" \
+            --prerelease
