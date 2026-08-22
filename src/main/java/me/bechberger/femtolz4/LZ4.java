@@ -312,7 +312,7 @@ public final class LZ4 {
                 head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
                 int sv = (int) slot;
-                if (sv > pos - WINDOW_SIZE && (int)(slot >>> 32) == v4) {
+                if (sv >= 0 & sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
                     int maxMatch = safeEnd - pos;
                     int len = MIN_MATCH;
                     while (len + 8 <= maxMatch) {
