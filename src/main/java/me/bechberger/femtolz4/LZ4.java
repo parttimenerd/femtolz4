@@ -180,7 +180,7 @@ public final class LZ4 {
                 int lv   = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
                 int lh   = (lv * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int llimit    = lp - WINDOW_SIZE;
-                int lchainLeft = maxChain;
+                int lchainLeft = Math.min(maxChain, 2);  /* cheap lookahead: 2 probes max */
                 int lazyLen   = 0;
                 int lazyDist  = 0;
 
