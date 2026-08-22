@@ -20,10 +20,6 @@ public final class LZ4 {
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
     private static final int HASH_BITS      = 16;
     private static final int HASH_SIZE      = 1 << HASH_BITS;
-    /* 12-bit fast table (long[4096] = 32 KB) fits in L1 (32 KB on Zen2/Threadripper).
-       13-bit was 64 KB — 2x L1, causing ~30% htab load misses. Trade-off: ~0.10x ratio. */
-    private static final int HASH_BITS_FAST = 12;
-    private static final int HASH_SIZE_FAST = 1 << HASH_BITS_FAST;
     private static final int MIN_MATCH   = 4;
     private static final int PADDING     = 5;
     private static final int NIL         = Integer.MIN_VALUE;
@@ -36,6 +32,12 @@ public final class LZ4 {
        Use the Java path for chain=1 compress on ARM to avoid the native overhead. */
     private static final boolean IS_AARCH64 =
         System.getProperty("os.arch", "").toLowerCase().contains("aarch64");
+
+    /* 12-bit fast table (long[4096] = 32 KB) fits in L1 on all platforms.
+       13-bit (64 KB) was tested on M4/128KB-L1 but still hurts: source data
+       working set pushes the combined footprint past L1 effective capacity. */
+    private static final int HASH_BITS_FAST = 12;
+    private static final int HASH_SIZE_FAST = 1 << HASH_BITS_FAST;
 
     /*
      * Fast-path hash table: long[8192] storing packed (value<<32|pos).
@@ -728,8 +730,7 @@ public final class LZ4 {
             }
             while (d < end) { buf[d++] = buf[src++]; }
         } else {
-            /* General case (offset 3..7): advance src in lockstep with dst.
-               After one stride the src reads already-written output = pattern. */
+            /* General case (offset 3..7): advance src in lockstep with dst. */
             int d = dst, end = dst + len;
             while (d < end) { buf[d++] = buf[src++]; }
         }
