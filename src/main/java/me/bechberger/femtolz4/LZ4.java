@@ -169,9 +169,10 @@ public final class LZ4 {
             int matchLen  = bestLen;
             int matchDist = bestDist;
 
-            // Lazy matching: try pos+1 if it might do better
+            // Lazy matching: try pos+1 only when match is short enough to benefit.
+            // Long matches (≥64 bytes) are rarely improved by one position of lookahead.
             boolean lazyProbed = false;
-            if (matchLen >= MIN_MATCH && pos < safeMain) {
+            if (matchLen >= MIN_MATCH && matchLen < 64 && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
                 int lv   = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
