@@ -314,7 +314,9 @@ public final class LZ4 {
                 head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
                 int sv = (int) slot;
-                if (sv >= 0 & sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
+                /* sv > pos - WINDOW_SIZE rejects both out-of-window positions and the
+                   sentinel (-2139062144), which is always < pos - WINDOW_SIZE. */
+                if (sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
                     int maxMatch = safeEnd - pos;
                     int len = MIN_MATCH;
                     while (len + 8 <= maxMatch) {
@@ -408,6 +410,12 @@ public final class LZ4 {
     /** Pure-Java compress at chain=1, bypassing the native path. For benchmarking. */
     static byte[] compressJava(byte[] src) {
         return compressJava(src, 1);
+    }
+
+    /** Pure-Java compress with offsets — no allocation. For JNI crossover benchmarking. */
+    static int compressJava(byte[] src, int srcOff, int srcLen,
+                            byte[] dst, int dstOff, int maxChain) {
+        return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
     }
 
     // ── Decompress ────────────────────────────────────────────────────────────
