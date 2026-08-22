@@ -89,13 +89,12 @@ FORCE_INLINE void lz4__emit_match_overflow(uint8_t *dst, int *op, int match_extr
         lz4__write_length_overflow(dst, op, match_extra);
 }
 
-/* 5-byte multiply-shift hash.  Folding in the 5th byte improves distribution
-   on binary/heap data compared to a plain 4-byte hash. */
+/* 4-byte multiply-shift hash for the chain path.
+   The 5th-byte variant (previously used) adds a load with no measurable ratio benefit. */
 FORCE_INLINE uint32_t lz4__hash(const uint8_t *p)
 {
     uint32_t v;
     memcpy(&v, p, 4);
-    v ^= (uint32_t)p[4] << 24;
     return (v * 0x9E3779B9u) >> (32 - HASH_BITS);
 }
 
@@ -106,7 +105,7 @@ FORCE_INLINE uint32_t lz4__hash4v(uint32_t v)
 }
 
 /* Push position into the hash chain for src[pos].
-   Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash).
+   Caller must ensure pos + 4 <= src_len (4 bytes needed by lz4__hash).
    Tail slot: bits[63:32] = 4-byte src value at prev (rejection filter, avoids
    cold src[prev] load), bits[31:0] = prev as signed int32 (NIL = negative). */
 FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
@@ -189,7 +188,7 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
 {
     int max_match = (src_len - PADDING_LITERALS) - pos;
     if (max_match < MIN_MATCH) {
-        if (pos + 5 <= src_len) lz4__insert(s, src, pos);
+        if (pos + 4 <= src_len) lz4__insert(s, src, pos);
         return 0;
     }
 
