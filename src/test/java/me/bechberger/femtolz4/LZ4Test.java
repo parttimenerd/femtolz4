@@ -127,6 +127,28 @@ class LZ4Test {
         assertFrameRoundTrip(src, blockSize, LZ4FrameOutputStream.LEVEL_FAST);
     }
 
+    @ParameterizedTest @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8, 9})
+    void frameRoundTripAllPublicLevels(int level) throws IOException {
+        byte[] src = randomBytes(256 * 1024 + 123, level);
+        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, level);
+    }
+
+    @Test void frameInvalidLevelRejected() {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        assertThrows(IllegalArgumentException.class,
+            () -> new LZ4FrameOutputStream(baos, 0));
+        assertThrows(IllegalArgumentException.class,
+            () -> new LZ4FrameOutputStream(baos, 10));
+    }
+
+    @Test void frameInvalidBlockSizeRejected() {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        assertThrows(IllegalArgumentException.class,
+            () -> new LZ4FrameOutputStream(baos, 12345, LZ4FrameOutputStream.LEVEL_FAST));
+        assertThrows(IllegalArgumentException.class,
+            () -> new LZ4FrameOutputStream(baos, 65 * 1024, LZ4FrameOutputStream.LEVEL_FAST));
+    }
+
     @Test void frameMultipleBlocks() throws IOException {
         // data larger than one block
         byte[] src = randomBytes(LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE * 3 + 500, 42);
@@ -218,6 +240,15 @@ class LZ4Test {
         byte[] hcInput = {0x60, 0x60};
         int expectedHC = (XXHash32.hash(hcInput, 0, 2) >> 8) & 0xFF;
         assertEquals((byte) expectedHC, compressed[6]);
+    }
+
+    @Test void frameLevelConstructorUsesDefaultBlockSize() throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, LZ4FrameOutputStream.LEVEL_NORMAL)) {
+            lz4.write("test".getBytes(StandardCharsets.UTF_8));
+        }
+        byte[] compressed = baos.toByteArray();
+        assertEquals((byte) 0x60, compressed[5]); // BD = 1MB default block size
     }
 
     @Test void frameEndsWithEndMark() throws IOException {

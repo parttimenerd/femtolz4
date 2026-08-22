@@ -39,8 +39,8 @@ class IssueRegressionTest {
     // LZ4FrameInputStream.available() threw NPE before the first read, and then
     // returned 0 (indicating EOF) instead of a positive estimate even when data
     // was present.
-    // femtolz4 does not expose available() beyond the InputStream default, which
-    // returns 0 and is therefore always safe.
+    // femtolz4 returns the number of already-decompressed bytes in the current
+    // block buffer, which is 0 before the first read() and positive afterwards.
 
     @Test void issue39_45_availableOnFreshStream() throws Exception {
         byte[] src = "data".repeat(500).getBytes(StandardCharsets.UTF_8);
@@ -58,10 +58,10 @@ class IssueRegressionTest {
         byte[] src = "abcdefgh".repeat(10000).getBytes(StandardCharsets.UTF_8);
         byte[] comp = frameCompress(src);
         LZ4FrameInputStream in = new LZ4FrameInputStream(new ByteArrayInputStream(comp));
-        // Read first byte, then available() must not return 0 if more data follows
+        // Read first byte, then available() must be positive since more data follows
         assertTrue(in.read() >= 0);
         int avail = in.available();
-        assertTrue(avail >= 0, "available() must not be negative after partial read");
+        assertTrue(avail > 0, "available() must be positive after partial read of a large stream");
         in.close();
     }
 
@@ -74,11 +74,6 @@ class IssueRegressionTest {
         byte[] src = new byte[128 * 1024];
         new java.util.Random(0).nextBytes(src);
 
-        // Compress with Java path (bypass native via direct call)
-        byte[] dstJ = new byte[LZ4.maxCompressedLength(src.length)];
-        // We access the pure-Java compressor through the public API with native disabled
-        // by testing on a forced-java impl (see Benchmark for that trick).
-        // Here: just verify both decompress to the same original.
         byte[] compNative = LZ4.compress(src, 1);
         byte[] backNative = LZ4.decompress(compNative, src.length);
         assertArrayEquals(src, backNative, "native round-trip");
@@ -94,6 +89,19 @@ class IssueRegressionTest {
     @Test void emptyFrameRoundTrip() throws Exception {
         byte[] comp = frameCompress(new byte[0]);
         assertArrayEquals(new byte[0], frameDecompress(comp));
+    }
+
+    @Test void rawZeroLengthBlockIsNotTreatedAsEof() throws Exception {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        // Standard frame header: magic, FLG=0x60, BD=0x40, HC=0x82
+        baos.write(new byte[]{0x04, 0x22, 0x4D, 0x18, 0x60, 0x40, (byte) 0x82});
+        // Raw block with zero payload: size field 0x80000000
+        baos.write(new byte[]{0x00, 0x00, 0x00, (byte) 0x80});
+        // Followed by a normal raw block carrying the actual data
+        baos.write(new byte[]{0x10, 0x00, 0x00, (byte) 0x80});
+        baos.write(EXPECTED);
+        baos.write(new byte[]{0x00, 0x00, 0x00, 0x00});
+        assertArrayEquals(EXPECTED, frameDecompress(baos.toByteArray()));
     }
 
     // ── Frame: write single bytes, read in bulk ───────────────────────────────
@@ -163,6 +171,192 @@ class IssueRegressionTest {
         System.arraycopy(b, 0, expected, a.length, b.length);
         assertArrayEquals(expected,
             new LZ4FrameInputStream(new ByteArrayInputStream(baos.toByteArray())).readAllBytes());
+    }
+
+    // ── Interop: frames produced by the lz4 CLI ──────────────────────────────
+    // The default lz4 CLI (v1.10) enables content checksum (FLG bit 2).
+    // --content-size adds 8 bytes of content size (FLG bit 3).
+    // -BX adds 4-byte block checksums after each block (FLG bit 4).
+    // All of these must be readable by LZ4FrameInputStream.
+
+    private static final byte[] EXPECTED = "Hello LZ4 world\n".getBytes(StandardCharsets.UTF_8);
+
+    /** Default lz4 frame: FLG=0x64 (content checksum enabled). */
+    @Test void lz4CliDefaultFrame() throws Exception {
+        // echo "Hello LZ4 world" | lz4 - (v1.10, default flags)
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,       // magic
+            0x64,                           // FLG: version=01, B.Indep=1, C.Checksum=1
+            0x40,                           // BD: 64KB blocks
+            (byte) 0xA7,                    // HC
+            0x10, 0x00, 0x00, (byte) 0x80,  // block size: raw, 16 bytes
+            // payload: "Hello LZ4 world\n"
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            0x00, 0x00, 0x00, 0x00,         // end mark
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31  // content checksum
+        };
+        assertArrayEquals(EXPECTED, frameDecompress(frame));
+    }
+
+    /** lz4 --content-size: FLG=0x6C (content size + content checksum). */
+    @Test void lz4CliContentSizeFrame() throws Exception {
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,
+            0x6C,                           // FLG: C.Size=1, C.Checksum=1
+            0x40,                           // BD
+            // content size: 16 (LE, 8 bytes)
+            0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            (byte) 0x83,                    // HC
+            0x10, 0x00, 0x00, (byte) 0x80,  // block size: raw, 16 bytes
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            0x00, 0x00, 0x00, 0x00,
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31
+        };
+        assertArrayEquals(EXPECTED, frameDecompress(frame));
+    }
+
+    /** lz4 -BX: FLG=0x74 (block checksum + content checksum). */
+    @Test void lz4CliBlockChecksumFrame() throws Exception {
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,
+            0x74,                           // FLG: B.Checksum=1, C.Checksum=1
+            0x40,                           // BD
+            (byte) 0xBD,                    // HC
+            0x10, 0x00, 0x00, (byte) 0x80,  // block size: raw, 16 bytes
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31,  // block checksum
+            0x00, 0x00, 0x00, 0x00,         // end mark
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31   // content checksum
+        };
+        assertArrayEquals(EXPECTED, frameDecompress(frame));
+    }
+
+    /** Skippable frame (0x184D2A50) before a normal frame must be silently ignored. */
+    @Test void skippableFrameBeforeNormalFrame() throws Exception {
+        byte[] normalFrame = frameCompress(EXPECTED);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        // write skippable frame: magic(4) + size(4) + data
+        baos.write(new byte[]{0x50, 0x2A, 0x4D, 0x18}); // magic 0x184D2A50 (LE)
+        baos.write(new byte[]{0x05, 0x00, 0x00, 0x00});  // size = 5
+        baos.write(new byte[]{0x01, 0x02, 0x03, 0x04, 0x05}); // user data
+        baos.write(normalFrame);
+        assertArrayEquals(EXPECTED, frameDecompress(baos.toByteArray()));
+    }
+
+    @Test void oversizedSkippableFrameRejected() {
+        byte[] frame = {
+            0x50, 0x2A, 0x4D, 0x18,
+            0x00, 0x00, 0x00, (byte) 0x80
+        };
+        LZ4Exception ex = assertThrows(LZ4Exception.class, () -> frameDecompress(frame));
+        assertTrue(ex.getMessage().contains("skippable frame too large"));
+    }
+
+    /** FLG bit 0 (Dictionary ID): 4-byte DictId field in header must be skipped. */
+    @Test void dictionaryIdFieldSkipped() throws Exception {
+        // Build a frame with FLG bit 0 set and a dummy 4-byte DictId.
+        // FLG=0x61: version=01, B.Indep=1, DictId=1 (bit 0)
+        byte flg = 0x61;
+        byte bd  = 0x40; // 64KB
+        byte[] hcInput = {flg, bd, /*dictId*/ 0x01, 0x02, 0x03, 0x04};
+        int hc = (XXHash32.hash(hcInput, 0, hcInput.length) >> 8) & 0xFF;
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(new byte[]{0x04, 0x22, 0x4D, 0x18}); // magic
+        baos.write(flg);
+        baos.write(bd);
+        baos.write(new byte[]{0x01, 0x02, 0x03, 0x04}); // dummy DictId
+        baos.write(hc);
+        // raw block: 16 bytes
+        baos.write(new byte[]{0x10, 0x00, 0x00, (byte) 0x80});
+        baos.write(EXPECTED);
+        baos.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // end mark
+        assertArrayEquals(EXPECTED, frameDecompress(baos.toByteArray()));
+    }
+
+    /** Dependent blocks (FLG bit 5 = 0): second block references previous block history. */
+    @Test void dependentBlockFrameDecodes() throws Exception {
+        byte[] part = "Hello LZ4 world\n".getBytes(StandardCharsets.UTF_8); // 16 bytes
+        byte[] expected = new byte[part.length * 2];
+        System.arraycopy(part, 0, expected, 0, part.length);
+        System.arraycopy(part, 0, expected, part.length, part.length);
+
+        // FLG=0x40: version=01, block-independent=0, no checksums.
+        byte flg = 0x40;
+        byte bd = 0x40; // 64KB blocks
+        int hc = (XXHash32.hash(new byte[]{flg, bd}, 0, 2) >> 8) & 0xFF;
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(new byte[]{0x04, 0x22, 0x4D, 0x18}); // magic
+        baos.write(flg);
+        baos.write(bd);
+        baos.write(hc);
+
+        // Block 1: raw 16-byte payload
+        baos.write(new byte[]{0x10, 0x00, 0x00, (byte) 0x80});
+        baos.write(part);
+
+        // Block 2: compressed sequence "repeat previous 16 bytes".
+        // token=0x0C => litLen=0, matchLen=4+12=16, offset=16
+        baos.write(new byte[]{0x03, 0x00, 0x00, 0x00}); // compressed payload length = 3
+        baos.write(new byte[]{0x0C, 0x10, 0x00});
+
+        baos.write(new byte[]{0x00, 0x00, 0x00, 0x00}); // end mark
+        assertArrayEquals(expected, frameDecompress(baos.toByteArray()));
+    }
+
+    // ── Checksum verification: corrupted checksums must be detected ─────────
+
+    /** Corrupted header checksum (HC) must throw LZ4Exception. */
+    @Test void corruptedHeaderChecksumThrows() {
+        // Copy the default CLI frame and corrupt the HC byte (index 6)
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,
+            0x64, 0x40,
+            (byte) 0xFF,                    // corrupted HC (was 0xA7)
+            0x10, 0x00, 0x00, (byte) 0x80,
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            0x00, 0x00, 0x00, 0x00,
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31
+        };
+        LZ4Exception ex = assertThrows(LZ4Exception.class, () -> frameDecompress(frame));
+        assertTrue(ex.getMessage().contains("header checksum"));
+    }
+
+    /** Corrupted block checksum must throw LZ4Exception. */
+    @Test void corruptedBlockChecksumThrows() {
+        // Block-checksum frame with one byte flipped in the block checksum
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,
+            0x74, 0x40, (byte) 0xBD,
+            0x10, 0x00, 0x00, (byte) 0x80,
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x00,  // corrupted (was 0x31)
+            0x00, 0x00, 0x00, 0x00,
+            (byte) 0xB0, (byte) 0xB1, (byte) 0xA7, 0x31
+        };
+        LZ4Exception ex = assertThrows(LZ4Exception.class, () -> frameDecompress(frame));
+        assertTrue(ex.getMessage().contains("block checksum"));
+    }
+
+    /** Corrupted content checksum must throw LZ4Exception. */
+    @Test void corruptedContentChecksumThrows() {
+        // Default frame with one byte flipped in the content checksum
+        byte[] frame = {
+            0x04, 0x22, 0x4D, 0x18,
+            0x64, 0x40, (byte) 0xA7,
+            0x10, 0x00, 0x00, (byte) 0x80,
+            0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x20, 0x4C, 0x5A,
+            0x34, 0x20, 0x77, 0x6F, 0x72, 0x6C, 0x64, 0x0A,
+            0x00, 0x00, 0x00, 0x00,
+            (byte) 0x00, (byte) 0xB1, (byte) 0xA7, 0x31   // corrupted (was 0xB0)
+        };
+        LZ4Exception ex = assertThrows(LZ4Exception.class, () -> frameDecompress(frame));
+        assertTrue(ex.getMessage().contains("content checksum"));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
