@@ -298,6 +298,12 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         memcpy(&pos4, src + pos, 4);       /* safe: pos < loop_end < src_len - 4 */
         h = lz4__hash4v(pos4);
         __builtin_prefetch(htab + h, 0, 3);
+        /* Two-step prefetch: also issue the next iteration's htab load now,
+           giving the memory subsystem an extra iteration to satisfy it. */
+        if (__builtin_expect(pos + 1 < loop_end, 1)) {
+            uint32_t next4; memcpy(&next4, src + pos + 1, 4);
+            __builtin_prefetch(htab + lz4__hash4v(next4), 0, 3);
+        }
     }
 
     if (pos < safe_end) {
