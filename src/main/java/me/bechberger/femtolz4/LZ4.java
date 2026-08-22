@@ -310,12 +310,11 @@ public final class LZ4 {
             int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
             while (pos < safeEnd2) {
+                /* ── Step A: evaluate pos ─────────────────────────── */
                 long slot = head[h];
                 head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
                 int sv = (int) slot;
-                /* sv > pos - WINDOW_SIZE rejects both out-of-window positions and the
-                   sentinel (-2139062144), which is always < pos - WINDOW_SIZE. */
                 if (sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
                     int maxMatch = safeEnd - pos;
                     int len = MIN_MATCH;
@@ -334,7 +333,6 @@ public final class LZ4 {
                                            | (matchExtra < 15 ? matchExtra : 15));
                         if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                         if (litLen > 0) {
-                            // Inline copyLiterals — avoids call overhead on hot path
                             if (litLen <= 32) {
                                 if (litLen >= 16) {
                                     LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
@@ -367,6 +365,68 @@ public final class LZ4 {
                     }
                 }
 
+                /* ── Step A miss: compute pos+1 hash, advance to pos+1 ── */
+                int v4_1 = (int) INT_LE.get(src, pos + 1);
+                int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                pos++;
+                if (pos >= safeEnd2) { pos = srcEnd; break; }
+
+                /* ── Step B: evaluate pos+1 using hash computed above ── */
+                long slot1 = head[h1];
+                head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
+
+                int sv1 = (int) slot1;
+                if (sv1 > pos - WINDOW_SIZE & (int)(slot1 >>> 32) == v4_1) {
+                    int maxMatch1 = safeEnd - pos;
+                    int len1 = MIN_MATCH;
+                    while (len1 + 8 <= maxMatch1) {
+                        long diff1 = (long) LONG_LE.get(src, sv1 + len1) ^ (long) LONG_LE.get(src, pos + len1);
+                        if (diff1 != 0) { len1 += Long.numberOfTrailingZeros(diff1) >>> 3; break; }
+                        len1 += 8;
+                    }
+                    while (len1 < maxMatch1 && src[sv1 + len1] == src[pos + len1]) len1++;
+
+                    if (len1 >= MIN_MATCH) {
+                        int litLen1     = pos - litStart;
+                        int matchExtra1 = len1 - MIN_MATCH;
+                        int matchDist1  = pos - sv1;
+                        dst[op++] = (byte) (((litLen1 < 15 ? litLen1 : 15) << 4)
+                                           | (matchExtra1 < 15 ? matchExtra1 : 15));
+                        if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
+                        if (litLen1 > 0) {
+                            if (litLen1 <= 32) {
+                                if (litLen1 >= 16) {
+                                    LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
+                                    LONG_LE.set(dst, op + 8,           (long) LONG_LE.get(src, litStart + 8));
+                                    LONG_LE.set(dst, op + litLen1 - 16, (long) LONG_LE.get(src, litStart + litLen1 - 16));
+                                    LONG_LE.set(dst, op + litLen1 - 8,  (long) LONG_LE.get(src, litStart + litLen1 - 8));
+                                } else if (litLen1 >= 8) {
+                                    LONG_LE.set(dst, op,                (long) LONG_LE.get(src, litStart));
+                                    LONG_LE.set(dst, op + litLen1 - 8,  (long) LONG_LE.get(src, litStart + litLen1 - 8));
+                                } else if (litLen1 >= 4) {
+                                    INT_LE.set(dst, op,                (int) INT_LE.get(src, litStart));
+                                    INT_LE.set(dst, op + litLen1 - 4,  (int) INT_LE.get(src, litStart + litLen1 - 4));
+                                } else {
+                                    for (int i = 0; i < litLen1; i++) dst[op + i] = src[litStart + i];
+                                }
+                            } else {
+                                System.arraycopy(src, litStart, dst, op, litLen1);
+                            }
+                            op += litLen1;
+                        }
+                        dst[op++] = (byte) matchDist1;
+                        dst[op++] = (byte) (matchDist1 >>> 8);
+                        if (matchExtra1 >= 15) op = writeOverflow(dst, op, matchExtra1 - 15);
+                        litStart = pos + len1;
+                        pos = litStart;
+                        if (pos >= safeEnd2) break;
+                        v4 = (int) INT_LE.get(src, pos);
+                        h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                        continue;
+                    }
+                }
+
+                /* Both pos and pos+1 missed — advance to pos+2 for next iteration. */
                 pos++;
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
                 v4 = (int) INT_LE.get(src, pos);
