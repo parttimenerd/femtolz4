@@ -31,6 +31,12 @@ public final class LZ4 {
     private static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     private static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
+    /* On AArch64 (Apple M-series, AWS Graviton, etc.) the Java JIT generates tighter
+       code than clang -O3 for the fast-path inner loop: measured ~40% faster on M4.
+       Use the Java path for chain=1 compress on ARM to avoid the native overhead. */
+    private static final boolean IS_AARCH64 =
+        System.getProperty("os.arch", "").toLowerCase().contains("aarch64");
+
     /*
      * Fast-path hash table: long[8192] storing packed (value<<32|pos).
      * bits[63:32] = 4-byte src value at pos, bits[31:0] = position as signed int.
@@ -88,7 +94,7 @@ public final class LZ4 {
     public static int compress(byte[] src, int srcOff, int srcLen,
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
-        if (NativeLZ4.AVAILABLE) {
+        if (NativeLZ4.AVAILABLE && !(maxChain == 1 && IS_AARCH64)) {
             int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff, maxChain);
             if (n > 0) return n;
         }
