@@ -494,7 +494,7 @@ public final class LZ4 {
      */
     public static int decompress(byte[] src, int srcOff, int srcLen,
                                  byte[] dst, int dstOff, int dstLen) {
-        if (NativeLZ4.AVAILABLE) {
+        if (NativeLZ4.AVAILABLE && !IS_AARCH64) {
             int n = NativeLZ4.decompress(src, srcOff, srcLen, dst, dstOff, dstLen);
             if (n >= 0) return n;
             // Native signalled an error — fall through to pure-Java for correct diagnosis.
