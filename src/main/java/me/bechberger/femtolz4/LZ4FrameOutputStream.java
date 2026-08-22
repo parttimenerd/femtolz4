@@ -16,18 +16,36 @@ import java.io.OutputStream;
  * <p>Data is split into independent blocks of up to {@value #DEFAULT_BLOCK_SIZE} bytes
  * (configurable). The output is compatible with the reference {@code lz4} CLI tool
  * and any spec-compliant LZ4 frame decoder.
+ * This stream intentionally writes block-independent frames only; block-dependent
+ * encoding is not implemented to keep the encoder simple.
+ * The default constructor uses 1 MiB blocks and the fastest compression level.
+ *
+ * <p>The public compression knob is {@code level} from {@value #MIN_LEVEL} to
+ * {@value #MAX_LEVEL}. Higher levels make compression spend more effort searching
+ * for longer back-references, which usually improves compression ratio at the cost
+ * of CPU time. Internally this is mapped to the lower-level {@code maxChain}
+ * parameter used by {@link LZ4#compress(byte[], int, int, byte[], int, int)}.
  *
  * @see <a href="https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md">LZ4 frame format spec</a>
  */
 public final class LZ4FrameOutputStream extends OutputStream {
 
+    private static final int[] BLOCK_SIZES = {64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024};
+    private static final int[] LEVEL_TO_MAX_CHAIN = {1, 2, 4, 6, 8, 12, 16, 32, 64};
+
     /** Default block size: 1 MiB. */
     public static final int DEFAULT_BLOCK_SIZE = 1 << 20;
 
-    /** Fastest compression (single hash probe per position). */
-    public static final int LEVEL_FAST   = 1;
-    /** Balanced compression (8 hash probes). */
-    public static final int LEVEL_NORMAL = 8;
+    /** Minimum public compression level. */
+    public static final int MIN_LEVEL = 1;
+
+    /** Maximum public compression level. */
+    public static final int MAX_LEVEL = 9;
+
+    /** Fastest compression. Equivalent to an internal maxChain of 1. */
+    public static final int LEVEL_FAST   = MIN_LEVEL;
+    /** Balanced compression. Equivalent to an internal maxChain of 8. */
+    public static final int LEVEL_NORMAL = 5;
 
     private final OutputStream out;
     private final int blockSize;
@@ -42,14 +60,21 @@ public final class LZ4FrameOutputStream extends OutputStream {
      * Wraps {@code out} with the given block size and compression level.
      *
      * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
-     * @param maxChain  hash-chain depth (use {@link #LEVEL_FAST} or {@link #LEVEL_NORMAL})
+     * @param level compression level from {@value #MIN_LEVEL} (fastest) to
+     *              {@value #MAX_LEVEL} (best ratio). Higher levels search more
+     *              previous match candidates before emitting literals.
      */
-    public LZ4FrameOutputStream(OutputStream out, int blockSize, int maxChain) {
+    public LZ4FrameOutputStream(OutputStream out, int blockSize, int level) {
         this.out       = out;
-        this.blockSize = blockSize;
-        this.maxChain  = maxChain;
-        this.inputBuf  = new byte[blockSize];
-        this.compBuf   = new byte[LZ4.maxCompressedLength(blockSize)];
+        this.blockSize = validateBlockSize(blockSize);
+        this.maxChain  = maxChainForLevel(level);
+        this.inputBuf  = new byte[this.blockSize];
+        this.compBuf   = new byte[LZ4.maxCompressedLength(this.blockSize)];
+    }
+
+    /** Wraps {@code out} with the default block size and the given compression level. */
+    public LZ4FrameOutputStream(OutputStream out, int level) {
+        this(out, DEFAULT_BLOCK_SIZE, level);
     }
 
     /** Wraps {@code out} with 1 MiB blocks and fastest compression. */
@@ -137,10 +162,31 @@ public final class LZ4FrameOutputStream extends OutputStream {
         out.write((v >>> 24) & 0xFF);
     }
 
+    private static int validateBlockSize(int blockSize) {
+        if (blockSizeIndex(blockSize) >= 0) return blockSize;
+        throw new IllegalArgumentException(
+                "blockSize must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB, got: " + blockSize);
+    }
+
+    private static int maxChainForLevel(int level) {
+        if (level >= MIN_LEVEL && level <= MAX_LEVEL) {
+            return LEVEL_TO_MAX_CHAIN[level - MIN_LEVEL];
+        }
+        throw new IllegalArgumentException(
+                "level must be between " + MIN_LEVEL + " and " + MAX_LEVEL + ", got: " + level);
+    }
+
+    private static int blockSizeIndex(int blockSize) {
+        for (int i = 0; i < BLOCK_SIZES.length; i++) {
+            if (BLOCK_SIZES[i] == blockSize) return i;
+        }
+        return -1;
+    }
+
     private static byte bdByte(int blockSize) {
-        if (blockSize <=   64 * 1024) return (byte) (4 << 4);
-        if (blockSize <=  256 * 1024) return (byte) (5 << 4);
-        if (blockSize <= 1024 * 1024) return (byte) (6 << 4);
-        return (byte) (7 << 4); // 4 MiB
+        int index = blockSizeIndex(blockSize);
+        if (index >= 0) return (byte) ((index + 4) << 4);
+        throw new IllegalArgumentException(
+                "blockSize must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB, got: " + blockSize);
     }
 }

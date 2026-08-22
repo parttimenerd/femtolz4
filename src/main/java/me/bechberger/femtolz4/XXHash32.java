@@ -81,5 +81,96 @@ public final class XXHash32 {
         return acc * PRIME1;
     }
 
+    /**
+     * Incremental (streaming) xxHash-32 (seed=0).
+     * Accepts data in arbitrary-sized chunks via {@link #update} and produces
+     * the final hash via {@link #digest}.
+     */
+    static final class Streaming {
+        private int v1, v2, v3, v4;
+        private final byte[] pending = new byte[16];
+        private int pendingLen;
+        private long totalLen;
+
+        Streaming() { reset(); }
+
+        void reset() {
+            v1 = PRIME1 + PRIME2;
+            v2 = PRIME2;
+            v3 = 0;
+            v4 = -PRIME1;
+            pendingLen = 0;
+            totalLen = 0;
+        }
+
+        void update(byte[] data, int off, int len) {
+            totalLen += len;
+
+            // Not enough to fill a 16-byte stripe — just buffer
+            if (pendingLen + len < 16) {
+                System.arraycopy(data, off, pending, pendingLen, len);
+                pendingLen += len;
+                return;
+            }
+
+            // Complete the pending stripe if any
+            if (pendingLen > 0) {
+                int fill = 16 - pendingLen;
+                System.arraycopy(data, off, pending, pendingLen, fill);
+                v1 = round(v1, readInt(pending, 0));
+                v2 = round(v2, readInt(pending, 4));
+                v3 = round(v3, readInt(pending, 8));
+                v4 = round(v4, readInt(pending, 12));
+                off += fill;
+                len -= fill;
+                pendingLen = 0;
+            }
+
+            // Process full 16-byte stripes
+            while (len >= 16) {
+                v1 = round(v1, readInt(data, off));
+                v2 = round(v2, readInt(data, off + 4));
+                v3 = round(v3, readInt(data, off + 8));
+                v4 = round(v4, readInt(data, off + 12));
+                off += 16;
+                len -= 16;
+            }
+
+            // Buffer remainder
+            if (len > 0) {
+                System.arraycopy(data, off, pending, 0, len);
+                pendingLen = len;
+            }
+        }
+
+        int digest() {
+            int h;
+            if (totalLen >= 16) {
+                h = Integer.rotateLeft(v1, 1) + Integer.rotateLeft(v2, 7)
+                  + Integer.rotateLeft(v3, 12) + Integer.rotateLeft(v4, 18);
+            } else {
+                h = PRIME5;
+            }
+            h += (int) totalLen;
+
+            int p = 0;
+            while (p + 4 <= pendingLen) {
+                h += readInt(pending, p) * PRIME3;
+                h  = Integer.rotateLeft(h, 17) * PRIME4;
+                p += 4;
+            }
+            while (p < pendingLen) {
+                h += (pending[p] & 0xFF) * PRIME5;
+                h  = Integer.rotateLeft(h, 11) * PRIME1;
+                p++;
+            }
+
+            h ^= h >>> 15; h *= PRIME2;
+            h ^= h >>> 13; h *= PRIME3;
+            h ^= h >>> 16;
+            return h;
+        }
+    }
+
     private XXHash32() {}
 }

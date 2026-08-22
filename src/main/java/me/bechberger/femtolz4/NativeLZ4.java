@@ -22,15 +22,15 @@ final class NativeLZ4 {
         try {
             String res = nativeResourcePath();
             if (res != null) {
-                InputStream in = NativeLZ4.class.getResourceAsStream(res);
-                if (in != null) {
-                    String suffix = res.endsWith(".dylib") ? ".dylib" : ".so";
-                    Path tmp = Files.createTempFile("femtolz4", suffix);
-                    tmp.toFile().deleteOnExit();
-                    Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
-                    in.close();
-                    System.load(tmp.toString());
-                    ok = true;
+                try (InputStream in = NativeLZ4.class.getResourceAsStream(res)) {
+                    if (in != null) {
+                        String suffix = res.endsWith(".dylib") ? ".dylib" : ".so";
+                        Path tmp = Files.createTempFile("femtolz4", suffix);
+                        tmp.toFile().deleteOnExit();
+                        Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
+                        System.load(tmp.toString());
+                        ok = true;
+                    }
                 }
             }
         } catch (Throwable ignored) {}

@@ -212,25 +212,17 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
         (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
         return 0;
     }
-    int result;
-    if (max_chain == 1) {
-        uint64_t *htab = get_htab();
-        if (!htab) { result = 0; goto done; }
-        memset(htab, 0x80, LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
-        result = lz4_compress_fast(
-                            (const uint8_t *)(src + src_off),
-                            (uint8_t *)(dst + dst_off),
-                            src_len, htab);
-    } else {
-        lz4_stream_t *s = get_stream();
-        if (!s) { result = 0; goto done; }
-        lz4_init(s);
-        result = lz4_compress_block(s,
+    uint64_t *htab = max_chain == 1 ? get_htab() : NULL;
+    lz4_stream_t *s = get_stream();
+    if ((max_chain == 1 && !htab) || !s) {
+        (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);
+        (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
+        return 0;
+    }
+    int result = lz4__compress_dispatch(s,
                      (const uint8_t *)(src + src_off),
                      (uint8_t *)(dst + dst_off),
-                     src_len, max_chain);
-    }
-    done:
+                     src_len, max_chain, htab);
     (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);
     (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
     return result;
