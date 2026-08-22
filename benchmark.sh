@@ -27,7 +27,7 @@ fi
 # ── Run benchmark ─────────────────────────────────────────────────────────────
 
 echo "Running benchmark (this takes ~30 s)..."
-CP="$TEST_CLASSES:$JAR:$YAWKAT_JAR${JPOUNTZ_JAR:+:$JPOUNTZ_JAR}"
+CP="$TEST_CLASSES:$JAR:$YAWKAT_JAR"
 RAW="$(java --enable-native-access=ALL-UNNAMED \
      -cp "$CP" \
      me.bechberger.femtolz4.Benchmark 2>/dev/null)"
