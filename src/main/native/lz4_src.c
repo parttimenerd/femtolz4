@@ -287,11 +287,13 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             }
         }
 
-        int32_t sv = (int32_t)(uint32_t)slot;
-        if (sv > pos - (int)WINDOW_SIZE && (uint32_t)(slot >> 32) == pos4) {
+        /* Unsigned distance check: (uint32_t)(pos-sv)-1 < WINDOW_SIZE-1 handles
+           sentinel (0x80808080…) naturally — wraps to a huge value, fails check. */
+        uint32_t sv = (uint32_t)slot;
+        uint32_t match_dist = (uint32_t)pos - sv;
+        if (match_dist - 1 < (uint32_t)(WINDOW_SIZE - 1) && (uint32_t)(slot >> 32) == pos4) {
             int max_match = safe_end - pos;
-            int match_len  = lz4__extend_match(src, sv, pos, max_match);
-            int match_dist = pos - sv;
+            int match_len  = lz4__extend_match(src, (int)sv, pos, max_match);
 
             if (match_len >= MIN_MATCH) {
                 int match_extra = match_len - MIN_MATCH;
@@ -325,11 +327,11 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         uint64_t slot1 = htab[h];
         htab[h]        = ((uint64_t)pos4 << 32) | (uint32_t)pos;
 
-        int32_t sv1 = (int32_t)(uint32_t)slot1;
-        if (sv1 > pos - (int)WINDOW_SIZE && (uint32_t)(slot1 >> 32) == pos4) {
+        uint32_t sv1 = (uint32_t)slot1;
+        uint32_t match_dist1 = (uint32_t)pos - sv1;
+        if (match_dist1 - 1 < (uint32_t)(WINDOW_SIZE - 1) && (uint32_t)(slot1 >> 32) == pos4) {
             int max_match1 = safe_end - pos;
-            int match_len1  = lz4__extend_match(src, sv1, pos, max_match1);
-            int match_dist1 = pos - sv1;
+            int match_len1  = lz4__extend_match(src, (int)sv1, pos, max_match1);
 
             if (match_len1 >= MIN_MATCH) {
                 int match_extra1 = match_len1 - MIN_MATCH;

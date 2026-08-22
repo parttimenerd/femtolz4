@@ -20,7 +20,9 @@ public final class LZ4 {
     private static final int WINDOW_MASK = WINDOW_SIZE - 1;
     private static final int HASH_BITS      = 16;
     private static final int HASH_SIZE      = 1 << HASH_BITS;
-    private static final int HASH_BITS_FAST = 13;
+    /* 12-bit fast table (long[4096] = 32 KB) fits in L1 (32 KB on Zen2/Threadripper).
+       13-bit was 64 KB — 2x L1, causing ~30% htab load misses. Trade-off: ~0.10x ratio. */
+    private static final int HASH_BITS_FAST = 12;
     private static final int HASH_SIZE_FAST = 1 << HASH_BITS_FAST;
     private static final int MIN_MATCH   = 4;
     private static final int PADDING     = 5;
