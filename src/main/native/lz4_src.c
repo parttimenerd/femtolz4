@@ -269,8 +269,23 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
     uint32_t h = lz4__hash4v(pos4);
 
     while (pos < loop_end) {
+        /* Step A: look up htab for pos, then speculatively start pos+1 lookup
+           so its htab cache line has time to arrive before we need it. */
         uint64_t slot = htab[h];
         htab[h]       = ((uint64_t)pos4 << 32) | (uint32_t)pos;
+
+        /* Speculatively prefetch pos+1 and pos+2 while we evaluate pos. */
+        uint32_t pos4_1 = 0;
+        uint32_t h1     = 0;
+        if (__builtin_expect(pos + 1 < loop_end, 1)) {
+            memcpy(&pos4_1, src + pos + 1, 4);
+            h1 = lz4__hash4v(pos4_1);
+            __builtin_prefetch(htab + h1, 0, 3);
+            if (__builtin_expect(pos + 2 < loop_end, 1)) {
+                uint32_t pos4_2; memcpy(&pos4_2, src + pos + 2, 4);
+                __builtin_prefetch(htab + lz4__hash4v(pos4_2), 0, 3);
+            }
+        }
 
         int32_t sv = (int32_t)(uint32_t)slot;
         if (sv > pos - (int)WINDOW_SIZE && (uint32_t)(slot >> 32) == pos4) {
@@ -294,16 +309,48 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             }
         }
 
+        /* Step B: miss at pos — advance to pos+1.  htab[h1] prefetch already
+           issued above, so the cache line may already be in L1/L2. */
+        pos++;
+        if (__builtin_expect(pos >= loop_end, 0)) {
+            /* Re-sync state for the exit path. */
+            memcpy(&pos4, src + pos, 4);
+            h = lz4__hash4v(pos4);
+            break;
+        }
+        pos4 = pos4_1;
+        h    = h1;
+
+        /* Step B: evaluate pos (the old pos+1). */
+        uint64_t slot1 = htab[h];
+        htab[h]        = ((uint64_t)pos4 << 32) | (uint32_t)pos;
+
+        int32_t sv1 = (int32_t)(uint32_t)slot1;
+        if (sv1 > pos - (int)WINDOW_SIZE && (uint32_t)(slot1 >> 32) == pos4) {
+            int max_match1 = safe_end - pos;
+            int match_len1  = lz4__extend_match(src, sv1, pos, max_match1);
+            int match_dist1 = pos - sv1;
+
+            if (match_len1 >= MIN_MATCH) {
+                int match_extra1 = match_len1 - MIN_MATCH;
+                lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra1);
+                { uint16_t off16 = (uint16_t)match_dist1; memcpy(dst + op, &off16, 2); }
+                op += 2;
+                lz4__emit_match_overflow(dst, &op, match_extra1);
+                lit_start = pos + match_len1;
+                pos = lit_start;
+                if (__builtin_expect(pos >= loop_end, 0)) break;
+                memcpy(&pos4, src + pos, 4);
+                h = lz4__hash4v(pos4);
+                __builtin_prefetch(htab + h, 0, 3);
+                continue;
+            }
+        }
+
+        /* Both pos and pos+1 missed — advance pos+1 → pos+2 for next iteration. */
         pos++;
         memcpy(&pos4, src + pos, 4);       /* safe: pos < loop_end < src_len - 4 */
         h = lz4__hash4v(pos4);
-        __builtin_prefetch(htab + h, 0, 3);
-        /* Two-step prefetch: also issue the next iteration's htab load now,
-           giving the memory subsystem an extra iteration to satisfy it. */
-        if (__builtin_expect(pos + 1 < loop_end, 1)) {
-            uint32_t next4; memcpy(&next4, src + pos + 1, 4);
-            __builtin_prefetch(htab + lz4__hash4v(next4), 0, 3);
-        }
     }
 
     if (pos < safe_end) {
