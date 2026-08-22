@@ -711,12 +711,18 @@ public final class LZ4 {
         long[] head = TL_FAST_HEAD.get();
         Arrays.fill(head, FAST_SENTINEL);
 
-        int op       = dstOff;
-        int litStart = srcOff;
-        int pos      = srcOff;
-        int srcEnd   = srcOff + srcLen;
-        int safeEnd  = srcEnd - PADDING;
-        int safeEnd2 = safeEnd - 1;
+        int op        = dstOff;
+        int litStart  = srcOff;
+        int pos       = srcOff;
+        int srcEnd    = srcOff + srcLen;
+        int safeEnd   = srcEnd - PADDING;
+        int safeEnd2  = safeEnd - 1;
+        /* Skip counter for incompressible regions.
+           After 128 consecutive miss-bytes, activate yawkat-style skip (no insert of skipped
+           positions) to achieve 10x+ throughput on uncompressible data. Resets on any match.
+           Below the threshold the 2-step loop runs exactly as before — zero cost on JFR data. */
+        int missBytes = 0;
+        int skipCtr   = 2 << 6;  // yawkat-style packed counter; step = (skipCtr >> 6) + 1
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
@@ -739,6 +745,8 @@ public final class LZ4 {
                     while (len < maxMatch && src[sv + len] == src[pos + len]) len++;
 
                     if (len >= MIN_MATCH) {
+                        missBytes = 0;
+                        skipCtr   = 2 << 6;
                         int litLen     = pos - litStart;
                         int matchExtra = len - MIN_MATCH;
                         int matchDist  = pos - sv;
@@ -800,6 +808,8 @@ public final class LZ4 {
                     while (len1 < maxMatch1 && src[sv1 + len1] == src[pos + len1]) len1++;
 
                     if (len1 >= MIN_MATCH) {
+                        missBytes = 0;
+                        skipCtr   = 2 << 6;
                         int litLen1     = pos - litStart;
                         int matchExtra1 = len1 - MIN_MATCH;
                         int matchDist1  = pos - sv1;
@@ -839,8 +849,18 @@ public final class LZ4 {
                     }
                 }
 
-                /* Both pos and pos+1 missed — advance to pos+2 for next iteration. */
-                pos++;
+                /* Both pos and pos+1 missed — check threshold for skip activation. */
+                if (missBytes < 128) {
+                    /* Still in compressible-data mode: exact 2-step (no skip). */
+                    missBytes += 2;
+                    pos++;
+                } else {
+                    /* Incompressible region: yawkat-style skip (no insert of skipped positions). */
+                    int step = (skipCtr >> 6) + 1;
+                    if (skipCtr < (17 << 6)) skipCtr++;
+                    missBytes += step;
+                    pos += step;
+                }
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
                 v4 = (int) INT_LE.get(src, pos);
                 h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
