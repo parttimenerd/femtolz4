@@ -19,7 +19,6 @@
    Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position.
    Reset to sentinel 0x80 per call so stale entries never match across calls. */
 static _Thread_local uint64_t *tl_htab = NULL;
-static _Thread_local uint16_t  tl_gen  = 0;  /* unused, kept for ABI compat */
 
 static uint64_t *get_htab(void)
 {
@@ -212,9 +211,9 @@ Java_me_bechberger_femtolz4_NativeLZ4_compress(JNIEnv *env, jclass cls,
         (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
         return 0;
     }
-    uint64_t *htab = max_chain == 1 ? get_htab() : NULL;
-    lz4_stream_t *s = get_stream();
-    if ((max_chain == 1 && !htab) || !s) {
+    uint64_t     *htab = max_chain == 1 ? get_htab() : NULL;
+    lz4_stream_t *s    = max_chain == 1 ? NULL       : get_stream();
+    if ((max_chain == 1 && !htab) || (max_chain != 1 && !s)) {
         (*env)->ReleasePrimitiveArrayCritical(env, jDst, dst, 0);
         (*env)->ReleasePrimitiveArrayCritical(env, jSrc, src, JNI_ABORT);
         return 0;

@@ -30,9 +30,17 @@
 #define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
 #define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint64_t))
 
+/*
+ * Compact chain tail: uint32_t[WINDOW_SIZE] = 256 KiB (same size as int[]).
+ * Each slot tail[pos & MASK] describes the link FROM pos TO its predecessor:
+ *   bits[31:16] = 16-bit fingerprint of the predecessor (rejection filter)
+ *   bits[15:0]  = 16-bit backward delta = pos - predecessor  (0 = no predecessor)
+ * The fingerprint is (pos4 * 0x9E37u) >> 16 where pos4 is the 4-byte prefix of
+ * the predecessor.  A mismatching fingerprint avoids loading src[predecessor].
+ */
 typedef struct {
-    int head[LZ4_HASH_SIZE];
-    int tail[WINDOW_SIZE];
+    int      head[LZ4_HASH_SIZE];
+    uint32_t tail[WINDOW_SIZE];
 } lz4_stream_t;
 
 /* Compress src_len bytes from src into dst.

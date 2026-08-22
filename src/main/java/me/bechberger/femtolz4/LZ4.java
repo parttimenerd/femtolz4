@@ -71,14 +71,16 @@ public final class LZ4 {
      * Compress {@code srcLen} bytes from {@code src[srcOff..]} into {@code dst[dstOff..]}.
      * {@code dst} must hold at least {@link #maxCompressedLength}({@code srcLen}) bytes.
      *
-     * <p>Uses the native lz4 library when available (ignores {@code maxChain}),
-     * otherwise falls back to the pure-Java implementation.
+     * <p>Uses the native lz4 library when available; falls back to the pure-Java
+     * implementation on platforms without a native build.  Both paths honour
+     * {@code maxChain}: 1 selects the fast single-probe path; values ≥2 select
+     * the hash-chain path with lazy matching up to the given chain depth.
      *
-        * <p>{@code maxChain} is the pure-Java compressor's search-effort limit: it caps
-        * how many previous candidate matches are inspected for each input position.
-        * Lower values are faster, higher values usually compress better.
-        *
-        * @param maxChain hash-chain depth for pure-Java path: 1 = fastest, ≥64 = better ratio
+     * <p>{@code maxChain} caps how many previous candidate matches are inspected
+     * for each input position.  Lower values are faster; higher values usually
+     * compress better.
+     *
+     * @param maxChain hash-chain depth: 1 = fastest, ≥64 = better ratio
      * @return number of bytes written into dst
      */
     public static int compress(byte[] src, int srcOff, int srcLen,
