@@ -1,0 +1,6 @@
+target/
+.DS_Store
+.jqwik-database
+hs_err_pid*.log
+*.iml
+.idea/
