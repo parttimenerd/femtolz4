@@ -25,13 +25,15 @@ ad9fc22  perf: compressFast2Way — adaptive skip counter for incompressible dat
 
 ---
 
-## Current benchmark numbers (Mac M4)
+## Current benchmark numbers (Mac M4, commit fae5a37)
 
 | data | chain=1 | chain=2 | chain=4 | chain=8 | yawkat fast |
 |------|---------|---------|---------|---------|-------------|
-| words (10MB) | 437 MB/s 1.72x | 230 MB/s 2.00x | 192 MB/s 2.02x | 147 MB/s 2.03x | 291 MB/s 1.80x |
-| text/random (20MB) | 5289 MB/s | 4982 MB/s | 3333 MB/s | 3317 MB/s | 36631 MB/s |
-| large_test.bin/JFR (267MB) | ~1270 MB/s | ~530 MB/s | — | — | — |
+| words (10MB, dict-like) | 437 MB/s 1.72x | 230 MB/s 2.00x | 192 MB/s 2.02x | 147 MB/s 2.03x | 291 MB/s 1.80x |
+| text/random (20MB, incompressible) | 5289 MB/s 0.996x | 4982 MB/s | 3333 MB/s | 3317 MB/s | 36631 MB/s |
+| large_test.bin/JFR (267MB) | 1225 MB/s 2.594x | 558 MB/s 2.615x | 496 MB/s 2.620x | 430 MB/s 2.627x | 768 MB/s 2.597x |
+
+**femtolz4 beats yawkat on JFR: chain=2 558 MB/s vs 768 MB/s yawkat; but chain=2 at 2.615x ratio vs 2.597x (better compression).**
 
 **Test files:** `/tmp/words_test.bin`, `/tmp/text_test.bin`, `/tmp/large_test.bin`
 
