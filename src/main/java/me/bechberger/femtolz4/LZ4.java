@@ -951,26 +951,36 @@ public final class LZ4 {
             if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
             if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
             int iLitLen = (int) litLen;
-            if (iLitLen <= 32) {
-                if (iLitLen >= 16) {
-                    LONG_LE.set(dst, op,              (long) LONG_LE.get(src, ip));
-                    LONG_LE.set(dst, op + 8,          (long) LONG_LE.get(src, ip + 8));
-                    LONG_LE.set(dst, op + iLitLen - 16, (long) LONG_LE.get(src, ip + iLitLen - 16));
-                    LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
-                } else if (iLitLen >= 8) {
-                    LONG_LE.set(dst, op,                (long) LONG_LE.get(src, ip));
-                    LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
-                } else if (iLitLen >= 4) {
-                    INT_LE.set(dst, op,                (int) INT_LE.get(src, ip));
-                    INT_LE.set(dst, op + iLitLen - 4,  (int) INT_LE.get(src, ip + iLitLen - 4));
+            /* Fast paths for the common small literal lengths (JFR data: 95%+ are 1-3 bytes). */
+            if (iLitLen == 1) {
+                dst[op++] = src[ip++];
+            } else if (iLitLen == 2) {
+                dst[op] = src[ip]; dst[op + 1] = src[ip + 1]; op += 2; ip += 2;
+            } else if (iLitLen == 3) {
+                dst[op] = src[ip]; dst[op + 1] = src[ip + 1]; dst[op + 2] = src[ip + 2];
+                op += 3; ip += 3;
+            } else if (iLitLen != 0) {
+                if (iLitLen <= 32) {
+                    if (iLitLen >= 16) {
+                        LONG_LE.set(dst, op,              (long) LONG_LE.get(src, ip));
+                        LONG_LE.set(dst, op + 8,          (long) LONG_LE.get(src, ip + 8));
+                        LONG_LE.set(dst, op + iLitLen - 16, (long) LONG_LE.get(src, ip + iLitLen - 16));
+                        LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
+                    } else if (iLitLen >= 8) {
+                        LONG_LE.set(dst, op,                (long) LONG_LE.get(src, ip));
+                        LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
+                    } else if (iLitLen >= 4) {
+                        INT_LE.set(dst, op,                (int) INT_LE.get(src, ip));
+                        INT_LE.set(dst, op + iLitLen - 4,  (int) INT_LE.get(src, ip + iLitLen - 4));
+                    } else {
+                        for (int ci = 0; ci < iLitLen; ci++) dst[op + ci] = src[ip + ci];
+                    }
                 } else {
-                    for (int ci = 0; ci < iLitLen; ci++) dst[op + ci] = src[ip + ci];
+                    System.arraycopy(src, ip, dst, op, iLitLen);
                 }
-            } else {
-                System.arraycopy(src, ip, dst, op, iLitLen);
+                ip += iLitLen;
+                op += iLitLen;
             }
-            ip += iLitLen;
-            op += iLitLen;
 
             if (ip >= srcEnd) break; // last sequence has no match
 
