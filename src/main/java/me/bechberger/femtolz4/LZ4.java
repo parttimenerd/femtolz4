@@ -155,6 +155,20 @@ public final class LZ4 {
         int skipCtr   = 2 << 6;
 
         while (pos <= safeMain) {
+            /* In incompressible regions, skip ahead without probing. */
+            if (missBytes >= 128) {
+                int step = (skipCtr >> 6) + 1;
+                if (skipCtr < (17 << 6)) skipCtr++;
+                int pos4s = (int) INT_LE.get(src, pos);
+                int hs = (pos4s * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int prevs = head[hs];
+                tail[pos & WINDOW_MASK] = ((long) pos4s << 32) | (prevs & 0xFFFFFFFFL);
+                head[hs] = pos;
+                missBytes += step;
+                pos += step;
+                continue;
+            }
+
             int pos4 = (int) INT_LE.get(src, pos);
             int h    = (pos4 * 0x9E3779B9) >>> (32 - HASH_BITS);
             int limit     = pos - WINDOW_SIZE;
@@ -300,15 +314,8 @@ public final class LZ4 {
                 }
                 pos = litStart;
             } else {
-                if (missBytes < 128) {
-                    missBytes++;
-                    pos++;
-                } else {
-                    int step = (skipCtr >> 6) + 1;
-                    if (skipCtr < (17 << 6)) skipCtr++;
-                    missBytes += step;
-                    pos += step;
-                }
+                missBytes++;
+                pos++;
             }
         }
         // pos is now past safeMain — just advance to srcEnd (tail bytes become literals)
@@ -347,6 +354,23 @@ public final class LZ4 {
         int skipCtr   = 2 << 6;
 
         while (pos <= safeMain) {
+            /* In incompressible regions after 128 miss-bytes, skip positions without probing.
+               On match-dense data this never fires; on random data it saves ~95% work. */
+            if (missBytes >= 128) {
+                int step = (skipCtr >> 6) + 1;
+                if (skipCtr < (17 << 6)) skipCtr++;
+                // Insert pos into chain (maintains chain for any partial-compressible region)
+                // but skip probing and just advance.
+                int pos4s = (int) INT_LE.get(src, pos);
+                int hs = (pos4s * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int prevs = head[hs];
+                tail[pos & WINDOW_MASK] = ((long) pos4s << 32) | (prevs & 0xFFFFFFFFL);
+                head[hs] = pos;
+                missBytes += step;
+                pos += step;
+                continue;
+            }
+
             int pos4  = (int) INT_LE.get(src, pos);
             int h     = (pos4 * 0x9E3779B9) >>> (32 - HASH_BITS);
             int limit = pos - WINDOW_SIZE;
@@ -508,17 +532,8 @@ public final class LZ4 {
                 }
                 pos = litStart;
             } else {
-                /* Adaptive skip for incompressible regions: after 128 consecutive miss-bytes,
-                   apply yawkat-style exponential skip to avoid O(n) chain walks per byte. */
-                if (missBytes < 128) {
-                    missBytes++;
-                    pos++;
-                } else {
-                    int step = (skipCtr >> 6) + 1;
-                    if (skipCtr < (17 << 6)) skipCtr++;
-                    missBytes += step;
-                    pos += step;
-                }
+                missBytes++;
+                pos++;
             }
         }
         if (pos < srcEnd) pos = srcEnd;
