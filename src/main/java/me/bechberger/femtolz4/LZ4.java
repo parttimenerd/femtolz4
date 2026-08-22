@@ -126,8 +126,7 @@ public final class LZ4 {
 
         while (pos <= safeMain) {
             int pos4 = (int) INT_LE.get(src, pos);
-            int v    = pos4 ^ ((src[pos + 4] & 0xFF) << 24);
-            int h    = (v * 0x9E3779B9) >>> (32 - HASH_BITS);
+            int h    = (pos4 * 0x9E3779B9) >>> (32 - HASH_BITS);
             int limit     = pos - WINDOW_SIZE;
             int chainLeft = maxChain;
             int bestLen   = 0;
@@ -177,8 +176,7 @@ public final class LZ4 {
             if (matchLen >= MIN_MATCH && matchLen < 64 && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
-                int lv   = lp4 ^ ((src[lp + 4] & 0xFF) << 24);
-                int lh   = (lv * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int lh   = (lp4 * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int llimit    = lp - WINDOW_SIZE;
                 int lchainLeft = Math.min(maxChain, 2);  /* cheap lookahead: 2 probes max */
                 int lazyLen   = 0;
@@ -263,8 +261,7 @@ public final class LZ4 {
                 int insertStart = pos + 1 + (lazyProbed ? 2 : 0);
                 for (int ip = insertStart; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
-                    int v2  = ip4 ^ ((src[ip + 4] & 0xFF) << 24);
-                    int h2  = (v2 * 0x9E3779B9) >>> (32 - HASH_BITS);
+                    int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
                     int prev2 = head[h2];
                     tail[ip & WINDOW_MASK] = ((long) ip4 << 32) | (prev2 & 0xFFFFFFFFL);
                     head[h2] = ip;
