@@ -517,12 +517,14 @@ public final class LZ4 {
         long[] head = TL_FAST2_HEAD.get();
         Arrays.fill(head, FAST_SENTINEL);
 
-        int op       = dstOff;
-        int litStart = srcOff;
-        int pos      = srcOff;
-        int srcEnd   = srcOff + srcLen;
-        int safeEnd  = srcEnd - PADDING;
-        int safeEnd2 = safeEnd - 1;
+        int op        = dstOff;
+        int litStart  = srcOff;
+        int pos       = srcOff;
+        int srcEnd    = srcOff + srcLen;
+        int safeEnd   = srcEnd - PADDING;
+        int safeEnd2  = safeEnd - 1;
+        int missBytes = 0;
+        int skipCtr   = 2 << 6;
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
@@ -571,6 +573,8 @@ public final class LZ4 {
                 }
 
                 if (matchLen >= MIN_MATCH) {
+                    missBytes = 0;
+                    skipCtr   = 2 << 6;
                     int litLen     = pos - litStart;
                     int matchExtra = matchLen - MIN_MATCH;
                     int matchDist  = pos - matchSv;
@@ -644,6 +648,8 @@ public final class LZ4 {
                 }
 
                 if (matchLen >= MIN_MATCH) {
+                    missBytes = 0;
+                    skipCtr   = 2 << 6;
                     int litLen     = pos - litStart;
                     int matchExtra = matchLen - MIN_MATCH;
                     int matchDist  = pos - matchSv;
@@ -682,8 +688,16 @@ public final class LZ4 {
                     continue outer;
                 }
 
-                /* Both pos and pos+1 missed. */
-                pos++;
+                /* Both pos and pos+1 missed — apply adaptive skip. */
+                if (missBytes < 128) {
+                    missBytes += 2;
+                    pos++;
+                } else {
+                    int step = (skipCtr >> 6) + 1;
+                    if (skipCtr < (17 << 6)) skipCtr++;
+                    missBytes += step;
+                    pos += step;
+                }
                 if (pos >= safeEnd2) { pos = srcEnd; break outer; }
                 v4 = (int) INT_LE.get(src, pos);
                 h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
