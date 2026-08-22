@@ -109,7 +109,8 @@ public final class LZ4 {
     public static int compress(byte[] src, int srcOff, int srcLen,
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
-        if (NativeLZ4.AVAILABLE && !(IS_AARCH64)) {
+        /* maxChain=0 (2-way associative fast path) is Java-only; native doesn't know this mode. */
+        if (NativeLZ4.AVAILABLE && !(IS_AARCH64) && maxChain != 0) {
             int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff, maxChain);
             if (n > 0) return n;
         }
