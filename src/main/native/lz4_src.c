@@ -392,8 +392,9 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
            Long matches are rarely improved by one position of lookahead, so skip
            the second search when the current match already covers ≥64 bytes. */
         if (match_len >= MIN_MATCH && match_len < 64 && pos + 1 < src_len) {
-            int lazy_dist = 0;
-            int lazy_len  = lz4__insert_and_match(s, src, pos + 1, src_len, max_chain, &lazy_dist);
+            int lazy_dist  = 0;
+            int lazy_chain = max_chain < 2 ? max_chain : 2;
+            int lazy_len   = lz4__insert_and_match(s, src, pos + 1, src_len, lazy_chain, &lazy_dist);
             lazy_probed = 1;
             if (lazy_len > match_len) {
                 pos++;
