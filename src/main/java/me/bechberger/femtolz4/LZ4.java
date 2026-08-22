@@ -119,6 +119,9 @@ public final class LZ4 {
         if (maxChain == 1) {
             return compressFast(src, srcOff, srcLen, dst, dstOff);
         }
+        if (maxChain == 2) {
+            return compressChain2(src, srcOff, srcLen, dst, dstOff);
+        }
         if (srcLen == 0) return 0;
 
         int[]  head    = TL_CHAIN_HEAD.get();
@@ -280,6 +283,200 @@ public final class LZ4 {
             }
         }
         // pos is now past safeMain — just advance to srcEnd (tail bytes become literals)
+        if (pos < srcEnd) pos = srcEnd;
+
+        int litLen = srcEnd - litStart;
+        if (litLen > 0) {
+            dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4));
+            if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+            op = copyLiterals(src, litStart, dst, op, litLen);
+        }
+        return op - dstOff;
+    }
+
+    /*
+     * Unrolled chain=2 compressor. Probes exactly 2 chain entries (the head entry
+     * plus one step), with both tail[] loads issued back-to-back so out-of-order
+     * execution can overlap them. Lazy probe also limited to 2 chain entries.
+     * Semantically identical to compressJavaImpl with maxChain=2.
+     */
+    private static int compressChain2(byte[] src, int srcOff, int srcLen,
+                                      byte[] dst, int dstOff) {
+        if (srcLen == 0) return 0;
+
+        int[]  head    = TL_CHAIN_HEAD.get();
+        long[] tail    = TL_CHAIN_TAIL.get();
+        Arrays.fill(head, NIL);
+
+        int op       = dstOff;
+        int litStart = srcOff;
+        int pos      = srcOff;
+        int srcEnd   = srcOff + srcLen;
+        int safeEnd  = srcEnd - PADDING;
+        int safeMain = safeEnd - 1;
+
+        while (pos <= safeMain) {
+            int pos4  = (int) INT_LE.get(src, pos);
+            int h     = (pos4 * 0x9E3779B9) >>> (32 - HASH_BITS);
+            int limit = pos - WINDOW_SIZE;
+
+            // Insert pos into chain head
+            int prev = head[h];
+            tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
+            head[h] = pos;
+
+            // Speculatively load both tail entries before doing comparisons,
+            // giving out-of-order execution maximum overlap on the two loads.
+            int  sv1   = prev;
+            long tslot1 = (sv1 > limit) ? tail[sv1 & WINDOW_MASK] : 0L;
+            int  sv2   = (int) tslot1;
+            long tslot2 = (sv1 > limit && sv2 > limit) ? tail[sv2 & WINDOW_MASK] : 0L;
+
+            int bestLen  = 0;
+            int bestDist = 0;
+
+            // Evaluate candidate sv1
+            if (sv1 > limit) {
+                int sv4_1 = (int)(tslot1 >>> 32);
+                if (sv4_1 == pos4) {
+                    int maxMatch = safeEnd - pos;
+                    int len = MIN_MATCH;
+                    while (len + 8 <= maxMatch) {
+                        long diff = (long) LONG_LE.get(src, sv1 + len)
+                                  ^ (long) LONG_LE.get(src, pos + len);
+                        if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                        len += 8;
+                    }
+                    while (len < maxMatch && src[sv1 + len] == src[pos + len]) len++;
+                    if (len > bestLen) { bestLen = len; bestDist = pos - sv1; }
+                }
+
+                // Evaluate candidate sv2 (second step in chain)
+                if (sv2 > limit && (bestLen == 0 || bestLen < safeEnd - pos)) {
+                    int sv4_2 = (int)(tslot2 >>> 32);
+                    if (sv4_2 == pos4 && (bestLen == 0 || src[sv2 + bestLen] == src[pos + bestLen])) {
+                        int maxMatch = safeEnd - pos;
+                        int len = MIN_MATCH;
+                        while (len + 8 <= maxMatch) {
+                            long diff = (long) LONG_LE.get(src, sv2 + len)
+                                      ^ (long) LONG_LE.get(src, pos + len);
+                            if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                            len += 8;
+                        }
+                        while (len < maxMatch && src[sv2 + len] == src[pos + len]) len++;
+                        if (len > bestLen) { bestLen = len; bestDist = pos - sv2; }
+                    }
+                }
+            }
+
+            int matchLen  = bestLen;
+            int matchDist = bestDist;
+
+            // Lazy probe at pos+1 when match is short
+            boolean lazyProbed = false;
+            if (matchLen >= MIN_MATCH && matchLen < 64 && pos < safeMain) {
+                int lp    = pos + 1;
+                int lp4   = (int) INT_LE.get(src, lp);
+                int lh    = (lp4 * 0x9E3779B9) >>> (32 - HASH_BITS);
+                int llimit = lp - WINDOW_SIZE;
+
+                int lprev = head[lh];
+                tail[lp & WINDOW_MASK] = ((long) lp4 << 32) | (lprev & 0xFFFFFFFFL);
+                head[lh] = lp;
+                lazyProbed = true;
+
+                int   lsv1    = lprev;
+                long  ltslot1 = (lsv1 > llimit) ? tail[lsv1 & WINDOW_MASK] : 0L;
+                int   lsv2    = (int) ltslot1;
+                long  ltslot2 = (lsv1 > llimit && lsv2 > llimit) ? tail[lsv2 & WINDOW_MASK] : 0L;
+
+                int lazyLen  = 0;
+                int lazyDist = 0;
+
+                if (lsv1 > llimit) {
+                    int lsv4_1 = (int)(ltslot1 >>> 32);
+                    if (lsv4_1 == lp4) {
+                        int maxMatch = safeEnd - lp;
+                        int len = MIN_MATCH;
+                        while (len + 8 <= maxMatch) {
+                            long diff = (long) LONG_LE.get(src, lsv1 + len)
+                                      ^ (long) LONG_LE.get(src, lp  + len);
+                            if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                            len += 8;
+                        }
+                        while (len < maxMatch && src[lsv1 + len] == src[lp + len]) len++;
+                        if (len > lazyLen) { lazyLen = len; lazyDist = lp - lsv1; }
+                    }
+
+                    if (lsv2 > llimit && (lazyLen == 0 || lazyLen < safeEnd - lp)) {
+                        int lsv4_2 = (int)(ltslot2 >>> 32);
+                        if (lsv4_2 == lp4 && (lazyLen == 0 || src[lsv2 + lazyLen] == src[lp + lazyLen])) {
+                            int maxMatch = safeEnd - lp;
+                            int len = MIN_MATCH;
+                            while (len + 8 <= maxMatch) {
+                                long diff = (long) LONG_LE.get(src, lsv2 + len)
+                                          ^ (long) LONG_LE.get(src, lp  + len);
+                                if (diff != 0) { len += Long.numberOfTrailingZeros(diff) >>> 3; break; }
+                                len += 8;
+                            }
+                            while (len < maxMatch && src[lsv2 + len] == src[lp + len]) len++;
+                            if (len > lazyLen) { lazyLen = len; lazyDist = lp - lsv2; }
+                        }
+                    }
+                }
+
+                if (lazyLen > matchLen) {
+                    pos++;
+                    lazyProbed = false;
+                    matchLen  = lazyLen;
+                    matchDist = lazyDist;
+                }
+            }
+
+            if (matchLen >= MIN_MATCH) {
+                int litLen     = pos - litStart;
+                int matchExtra = matchLen - MIN_MATCH;
+                dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
+                if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
+                if (litLen > 0) {
+                    if (litLen <= 32) {
+                        if (litLen >= 16) {
+                            LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
+                            LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
+                            LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
+                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                        } else if (litLen >= 8) {
+                            LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
+                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
+                        } else if (litLen >= 4) {
+                            INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
+                            INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
+                        } else {
+                            for (int ci = 0; ci < litLen; ci++) dst[op + ci] = src[litStart + ci];
+                        }
+                    } else {
+                        System.arraycopy(src, litStart, dst, op, litLen);
+                    }
+                    op += litLen;
+                }
+                dst[op++] = (byte)  matchDist;
+                dst[op++] = (byte) (matchDist >>> 8);
+                if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
+                litStart = pos + matchLen;
+                int insertEnd   = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
+                int insertStart = pos + 1 + (lazyProbed ? 2 : 0);
+                for (int ip = insertStart; ip < insertEnd; ip += 2) {
+                    int ip4 = (int) INT_LE.get(src, ip);
+                    int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
+                    int prev2 = head[h2];
+                    tail[ip & WINDOW_MASK] = ((long) ip4 << 32) | (prev2 & 0xFFFFFFFFL);
+                    head[h2] = ip;
+                }
+                pos = litStart;
+            } else {
+                pos++;
+            }
+        }
         if (pos < srcEnd) pos = srcEnd;
 
         int litLen = srcEnd - litStart;
