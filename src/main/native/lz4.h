@@ -31,16 +31,21 @@
 #define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint64_t))
 
 /*
- * Compact chain tail: uint32_t[WINDOW_SIZE] = 256 KiB (same size as int[]).
- * Each slot tail[pos & MASK] describes the link FROM pos TO its predecessor:
- *   bits[31:16] = 16-bit fingerprint of the predecessor (rejection filter)
- *   bits[15:0]  = 16-bit backward delta = pos - predecessor  (0 = no predecessor)
- * The fingerprint is (pos4 * 0x9E37u) >> 16 where pos4 is the 4-byte prefix of
- * the predecessor.  A mismatching fingerprint avoids loading src[predecessor].
+ * Chain tail: uint64_t[WINDOW_SIZE] = 512 KiB.
+ * Each slot tail[pos & MASK] stores the link FROM pos TO its predecessor:
+ *   bits[63:32] = 4-byte src value at the predecessor position (rejection filter)
+ *   bits[31:0]  = predecessor absolute position (NIL = 0x80808080 sentinel)
+ * Storing the absolute position (not a relative delta) avoids stale-slot
+ * corruption: when tail[pos & MASK] is overwritten by a later position that
+ * maps to the same slot, the stored absolute position fails the window check
+ * (sv <= limit) and the chain walk terminates cleanly.
+ * Storing the predecessor's 4-byte value avoids a cold src[sv] load on rejection.
+ * NIL sentinel: head[] is initialised to -1 (all 0xFF bytes), and an entry with
+ * prevPos < 0 (high bit set) is treated as end-of-chain.
  */
 typedef struct {
     int      head[LZ4_HASH_SIZE];
-    uint32_t tail[WINDOW_SIZE];
+    uint64_t tail[WINDOW_SIZE];
 } lz4_stream_t;
 
 /* Compress src_len bytes from src into dst.

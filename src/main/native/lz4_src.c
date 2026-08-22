@@ -105,25 +105,20 @@ FORCE_INLINE uint32_t lz4__hash4v(uint32_t v)
     return (v * 0x9E3779B9u) >> (32 - LZ4_HASH_BITS_FAST);
 }
 
-/* 16-bit fingerprint derived from the 4-byte value at a candidate position.
-   Used as a cheap rejection filter in the chain walk before loading src[sv]. */
-FORCE_INLINE uint16_t lz4__fp16(uint32_t v)
-{
-    return (uint16_t)((v * 0x9E3779B9u) >> 16);
-}
-
 /* Push position into the hash chain for src[pos].
-   Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash). */
+   Caller must ensure pos + 5 <= src_len (5 bytes needed by lz4__hash).
+   Tail slot: bits[63:32] = 4-byte src value at prev (rejection filter, avoids
+   cold src[prev] load), bits[31:0] = prev as signed int32 (NIL = negative). */
 FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 {
     uint32_t h    = lz4__hash(src + pos);
     int      prev = s->head[h];
-    uint32_t slot;
+    uint64_t slot;
     if (prev >= 0 && prev > pos - (int)WINDOW_SIZE) {
         uint32_t prev4; memcpy(&prev4, src + prev, 4);
-        slot = ((uint32_t)lz4__fp16(prev4) << 16) | (uint16_t)(pos - prev);
+        slot = ((uint64_t)prev4 << 32) | (uint32_t)prev;
     } else {
-        slot = 0;   /* no reachable predecessor: delta=0 signals end of chain */
+        slot = (uint64_t)(uint32_t)(int32_t)-1;   /* NIL: negative prevPos = end of chain */
     }
     s->tail[pos & WINDOW_MASK] = slot;
     s->head[h]                 = pos;
@@ -203,17 +198,16 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
     uint32_t h         = lz4__hash(src + pos);
     uint32_t pos4;
     memcpy(&pos4, src + pos, 4);
-    uint16_t pos_fp    = lz4__fp16(pos4);
 
     /* Insert pos into the chain before walking it. */
     {
         int prev = s->head[h];
-        uint32_t slot;
+        uint64_t slot;
         if (prev >= 0 && prev > limit) {
             uint32_t prev4; memcpy(&prev4, src + prev, 4);
-            slot = ((uint32_t)lz4__fp16(prev4) << 16) | (uint16_t)(pos - prev);
+            slot = ((uint64_t)prev4 << 32) | (uint32_t)prev;
         } else {
-            slot = 0;
+            slot = (uint64_t)(uint32_t)(int32_t)-1;
         }
         s->tail[pos & WINDOW_MASK] = slot;
         s->head[h] = pos;
@@ -222,24 +216,19 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
     int best_len  = 0;
     int best_dist = 0;
 
-    /* Walk the chain via compact delta+fingerprint tail entries. */
-    uint32_t slot = s->tail[pos & WINDOW_MASK];
-    while (slot) {
-        int      delta = (int)(slot & 0xFFFFu);
-        uint16_t fp    = (uint16_t)(slot >> 16);
-        int      sv    = pos - delta;
-        if (sv <= limit) break;
+    /* Walk the chain: each slot stores (prev4 << 32) | prevPos. */
+    uint64_t slot = s->tail[pos & WINDOW_MASK];
+    for (;;) {
+        int sv = (int32_t)(uint32_t)slot;
+        if (sv < 0 || sv <= limit) break;          /* NIL or out of window */
 
-        if (fp == pos_fp) {
-            uint32_t sv4;
-            memcpy(&sv4, src + sv, 4);
-            if (sv4 == pos4 &&
-                (best_len == 0 || src[sv + best_len] == src[pos + best_len])) {
-                int len = lz4__extend_match(src, sv, pos, max_match);
-                if (len > best_len) {
-                    best_len = len; best_dist = pos - sv;
-                    if (len == max_match) break;
-                }
+        uint32_t sv4 = (uint32_t)(slot >> 32);
+        if (sv4 == pos4 &&
+            (best_len == 0 || src[sv + best_len] == src[pos + best_len])) {
+            int len = lz4__extend_match(src, sv, pos, max_match);
+            if (len > best_len) {
+                best_len = len; best_dist = pos - sv;
+                if (len == max_match) break;
             }
         }
 
