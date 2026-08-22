@@ -717,10 +717,19 @@ public final class LZ4 {
             int d = dst, end = dst + len;
             while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
+        } else if (offset >= 8) {
+            /* Non-overlapping 8-byte strides: src and dst both advance by 8 per iteration.
+               After src catches up by offset bytes, it reads previously-written output
+               (= the original pattern repeated), so the copy is correct. */
+            int d = dst, end = dst + len;
+            while (d + 8 <= end) {
+                LONG_LE.set(buf, d, (long) LONG_LE.get(buf, src));
+                src += 8; d += 8;
+            }
+            while (d < end) { buf[d++] = buf[src++]; }
         } else {
-            /* General case: advance src in lockstep with dst (copies repeat the
-               pattern naturally — after one stride, src points at already-written
-               output, which is the same pattern repeated). */
+            /* General case (offset 3..7): advance src in lockstep with dst.
+               After one stride the src reads already-written output = pattern. */
             int d = dst, end = dst + len;
             while (d < end) { buf[d++] = buf[src++]; }
         }
