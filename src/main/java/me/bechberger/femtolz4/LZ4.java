@@ -145,12 +145,14 @@ public final class LZ4 {
         long[] tail    = TL_CHAIN_TAIL.get();
         Arrays.fill(head, NIL);
 
-        int op       = dstOff;
-        int litStart = srcOff;
-        int pos      = srcOff;
-        int srcEnd   = srcOff + srcLen;
-        int safeEnd  = srcEnd - PADDING;
-        int safeMain = safeEnd - 1;
+        int op        = dstOff;
+        int litStart  = srcOff;
+        int pos       = srcOff;
+        int srcEnd    = srcOff + srcLen;
+        int safeEnd   = srcEnd - PADDING;
+        int safeMain  = safeEnd - 1;
+        int missBytes = 0;
+        int skipCtr   = 2 << 6;
 
         while (pos <= safeMain) {
             int pos4 = (int) INT_LE.get(src, pos);
@@ -201,7 +203,7 @@ public final class LZ4 {
             // Lazy matching: try pos+1 only when match is short enough to benefit.
             // Long matches (≥64 bytes) are rarely improved by one position of lookahead.
             boolean lazyProbed = false;
-            if (matchLen >= MIN_MATCH && matchLen < 64 && pos < safeMain) {
+            if (matchLen >= MIN_MATCH && matchLen < 8 && pos < safeMain) {
                 int lp   = pos + 1;
                 int lp4  = (int) INT_LE.get(src, lp);
                 int lh   = (lp4 * 0x9E3779B9) >>> (32 - HASH_BITS);
@@ -252,6 +254,8 @@ public final class LZ4 {
             }
 
             if (matchLen >= MIN_MATCH) {
+                missBytes = 0;
+                skipCtr   = 2 << 6;
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 // Inline emit sequence
@@ -296,7 +300,15 @@ public final class LZ4 {
                 }
                 pos = litStart;
             } else {
-                pos++;
+                if (missBytes < 128) {
+                    missBytes++;
+                    pos++;
+                } else {
+                    int step = (skipCtr >> 6) + 1;
+                    if (skipCtr < (17 << 6)) skipCtr++;
+                    missBytes += step;
+                    pos += step;
+                }
             }
         }
         // pos is now past safeMain — just advance to srcEnd (tail bytes become literals)
@@ -325,12 +337,14 @@ public final class LZ4 {
         long[] tail    = TL_CHAIN_TAIL.get();
         Arrays.fill(head, NIL);
 
-        int op       = dstOff;
-        int litStart = srcOff;
-        int pos      = srcOff;
-        int srcEnd   = srcOff + srcLen;
-        int safeEnd  = srcEnd - PADDING;
-        int safeMain = safeEnd - 1;
+        int op        = dstOff;
+        int litStart  = srcOff;
+        int pos       = srcOff;
+        int srcEnd    = srcOff + srcLen;
+        int safeEnd   = srcEnd - PADDING;
+        int safeMain  = safeEnd - 1;
+        int missBytes = 0;
+        int skipCtr   = 2 << 6;
 
         while (pos <= safeMain) {
             int pos4  = (int) INT_LE.get(src, pos);
@@ -389,9 +403,10 @@ public final class LZ4 {
             int matchLen  = bestLen;
             int matchDist = bestDist;
 
-            // Lazy probe at pos+1 when match is short
+            // Lazy probe at pos+1 only for very short matches — long matches (≥8 bytes) are
+            // rarely improved by one position of lookahead and lazy costs ~15% speed on JFR.
             boolean lazyProbed = false;
-            if (matchLen >= MIN_MATCH && matchLen < 64 && pos < safeMain) {
+            if (matchLen >= MIN_MATCH && matchLen < 8 && pos < safeMain) {
                 int lp    = pos + 1;
                 int lp4   = (int) INT_LE.get(src, lp);
                 int lh    = (lp4 * 0x9E3779B9) >>> (32 - HASH_BITS);
@@ -451,6 +466,8 @@ public final class LZ4 {
             }
 
             if (matchLen >= MIN_MATCH) {
+                missBytes = 0;
+                skipCtr   = 2 << 6;
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
@@ -491,7 +508,17 @@ public final class LZ4 {
                 }
                 pos = litStart;
             } else {
-                pos++;
+                /* Adaptive skip for incompressible regions: after 128 consecutive miss-bytes,
+                   apply yawkat-style exponential skip to avoid O(n) chain walks per byte. */
+                if (missBytes < 128) {
+                    missBytes++;
+                    pos++;
+                } else {
+                    int step = (skipCtr >> 6) + 1;
+                    if (skipCtr < (17 << 6)) skipCtr++;
+                    missBytes += step;
+                    pos += step;
+                }
             }
         }
         if (pos < srcEnd) pos = srcEnd;
