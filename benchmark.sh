@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
-# Run the femtolz4 benchmark and update the <!-- BENCHMARK --> section in README.md.
+# Run Benchmark + CorpusBench and splice results into README.md.
 # Usage: ./benchmark.sh [path/to/README.md]
+#
+# Part 1: Benchmark.java — one table per JFR/large file (JFR in ~/Downloads/)
+#   impl | compress MB/s | decompress MB/s | ratio
+# Part 2: CorpusBench — one table per synthetic corpus
+#   impl | chain | compress MB/s | decompress MB/s | ratio
 
 set -euo pipefail
 
@@ -12,78 +17,124 @@ cd "$SCRIPT_DIR"
 # ── Build ─────────────────────────────────────────────────────────────────────
 
 echo "Building..."
-mvn -q package -DskipTests
+mvn -q clean package -DskipTests
+mvn -q test-compile
 
 JAR="$SCRIPT_DIR/target/femtolz4-0.1.0.jar"
 TEST_CLASSES="$SCRIPT_DIR/target/test-classes"
-YAWKAT_JAR="$(ls ~/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/*.jar 2>/dev/null | grep -v sources | grep -v javadoc | head -1)"
-JPOUNTZ_JAR="$(find ~/.m2/repository/net/jpountz/lz4 -name '*.jar' 2>/dev/null | grep -v sources | grep -v javadoc | head -1)"
+YAWKAT_JAR="$(ls ~/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/*.jar 2>/dev/null \
+              | grep -v sources | grep -v javadoc | head -1)"
 
 if [[ -z "$YAWKAT_JAR" ]]; then
-    echo "yawkat jar not found — run 'mvn test-compile' first to pull it." >&2
+    echo "yawkat jar not found — run 'mvn test-compile' first." >&2
     exit 1
 fi
 
-# ── Run benchmark ─────────────────────────────────────────────────────────────
-
-echo "Running benchmark (this takes ~30 s)..."
 CP="$TEST_CLASSES:$JAR:$YAWKAT_JAR"
-RAW="$(java --enable-native-access=ALL-UNNAMED \
-     -cp "$CP" \
-     me.bechberger.femtolz4.Benchmark 2>/dev/null)"
 
-echo "$RAW"
-echo
+# ── Part 1: JFR + large_test Benchmark ───────────────────────────────────────
 
-# ── Parse into markdown tables (BSD-awk and gawk compatible) ─────────────────
-#
-# Benchmark output format:
-#   === <filename>  (<size> MB) ===
-#     <impl>     <comp>   <decomp>   <ratio>
+echo "Running Benchmark (JFR files + large_test.bin, ~1 min)..."
+JFR_RAW="$(java --enable-native-access=ALL-UNNAMED \
+     -cp "$CP" me.bechberger.femtolz4.Benchmark 2>/dev/null)"
 
-TABLE="$(echo "$RAW" | awk '
+# Parse Benchmark output (format: "  impl  N  M  Rx" per line per file section)
+JFR_TABLE="$(echo "$JFR_RAW" | awk '
 /^=== / {
-    if (file != "") print_block()
-    line = $0
-    sub(/^=== /, "", line); sub(/ ===$/, "", line)
-    idx = index(line, "  (")
-    file = substr(line, 1, idx - 1)
-    size = substr(line, idx + 3); sub(/\)$/, "", size)
-    n = 0
+    gsub(/^=== /, ""); gsub(/ ===$/, "")
+    cur = $0
+    if (cur != "") {
+        print ""
+        print "### " cur
+        print ""
+        print "| implementation | compress MB/s | decompress MB/s | ratio |"
+        print "|----------------|:-------------:|:---------------:|:-----:|"
+    }
     next
 }
-/femto|yawkat/ {
-    impl[n] = $1; comp[n] = $2; decomp[n] = $3; ratio[n] = $4
-    n++
-    next
-}
-END { if (file != "") print_block() }
-
-function print_block() {
-    print "### " file " (" size ")"
-    print ""
-    print "| implementation | compress MB/s | decompress MB/s | ratio |"
-    print "|----------------|:-------------:|:---------------:|:-----:|"
-    for (i = 0; i < n; i++)
-        printf "| %-20s | %13s | %15s | %5s |\n", impl[i], comp[i], decomp[i], ratio[i]
-    print ""
+/^  / && NF == 4 {
+    impl = $1; c = $2; d = $3; r = $4
+    printf "| %-22s | %13s | %15s | %5s |\n", impl, c, d, r
 }
 ')"
 
-PLATFORM="$(uname -m) $(uname -s)"
-# Apple Silicon: get chip name
-if command -v system_profiler &>/dev/null; then
-    CHIP="$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Chip/{print $2}' | xargs)"
-    [ -n "$CHIP" ] && PLATFORM="$CHIP, macOS"
-fi
-JDK_VER="$(java -version 2>&1 | head -1 | tr -d '"')"
-TIMESTAMP="$(date -u '+%Y-%m-%d')"
+# ── Generate corpus if missing ────────────────────────────────────────────────
 
-# ── Splice into README (perl handles multi-line replacement portably) ─────────
+if [[ ! -f /tmp/femtolz4-corpora/words-10m.bin ]]; then
+    echo "Generating corpora..."
+    java --enable-native-access=ALL-UNNAMED \
+         -cp "$TEST_CLASSES:$JAR" me.bechberger.femtolz4.CorpusDataGen
+fi
+
+# ── Part 2: CorpusBench ───────────────────────────────────────────────────────
+
+CORPORA=(
+    /tmp/femtolz4-corpora/words-10m.bin
+    /tmp/femtolz4-corpora/text-20m.bin
+    /tmp/femtolz4-corpora/json-10m.bin
+    /tmp/femtolz4-corpora/rle-20m.bin
+    /tmp/femtolz4-corpora/random-20m.bin
+    /tmp/large_test.bin
+)
+
+echo "Running CorpusBench (synthetic corpora, ~2 min)..."
+RAW="$(java --enable-native-access=ALL-UNNAMED \
+     -Dbench.warmMs=400 -Dbench.measureMs=600 -Dbench.trials=5 \
+     -Dbench.levels=1,256 \
+     -cp "$CP" me.bechberger.femtolz4.CorpusBench "${CORPORA[@]}" 2>/dev/null)"
+
+CORPUS_TABLE="$(echo "$RAW" | awk -F',' '
+/^CSV/ && $2 != "operation" {
+    op=$2; corpus=$3; size=$4; chain=$5; impl=$6; mbps=$7; ratio=$9
+    key = corpus "|" impl "|" chain
+    if (op == "compress")   { comp[key]=mbps; rat[key]=ratio; sz[corpus]=size }
+    if (op == "decompress") { dec[key]=mbps }
+    if (!(key in seen)) { seen[key]=1; keys[nkeys++]=key }
+}
+END {
+    cur_corpus = ""
+    for (i = 0; i < nkeys; i++) {
+        split(keys[i], p, "|")
+        corpus=p[1]; impl=p[2]; chain=p[3]
+        key=keys[i]
+        if (corpus != cur_corpus) {
+            if (cur_corpus != "") print ""
+            mb = sprintf("%.0f MB", sz[corpus]/1000000)
+            print ""
+            print "### " corpus " (" mb ")"
+            print ""
+            print "| implementation | compress MB/s | decompress MB/s | ratio |"
+            print "|----------------|:-------------:|:---------------:|:-----:|"
+            cur_corpus = corpus
+        }
+        label = (impl == "dispatch") ? ((chain == "1") ? "femto-fast" : "femto-hc") \
+              : (impl == "yawkat-fast" || impl == "yawkat-hc") ? impl : (impl "-" chain)
+        c = (key in comp) ? sprintf("%7.0f", comp[key]) : "      -"
+        d = (key in dec)  ? sprintf("%7.0f", dec[key])  : "      -"
+        r = (key in rat)  ? sprintf("%.2fx", rat[key])  : "   -"
+        printf "| %-22s | %13s | %15s | %5s |\n", label, c, d, r
+    }
+}
+')"
+
+# ── Platform info ─────────────────────────────────────────────────────────────
+
+META="$(echo "$RAW" | grep '^META' | head -1)"
+JAVA_VER="$(echo "$META" | grep -o 'java=[^,]*' | cut -d= -f2)"
+
+CHIP=""
+if command -v system_profiler &>/dev/null; then
+    CHIP="$(system_profiler SPHardwareDataType 2>/dev/null \
+           | awk -F': ' '/Chip/{print $2}' | xargs)"
+fi
+PLATFORM="${CHIP:-$(uname -m)}"
+
+# ── Splice into README ────────────────────────────────────────────────────────
 
 BLOCK="<!-- BENCHMARK:START -->
-<!-- generated by benchmark.sh on $TIMESTAMP — $PLATFORM — $JDK_VER -->
-${TABLE}
+<!-- generated by benchmark.sh on $(date -u '+%Y-%m-%d') — $PLATFORM, macOS — java version $JAVA_VER -->
+${JFR_TABLE}
+${CORPUS_TABLE}
 <!-- BENCHMARK:END -->"
 
 if grep -q '<!-- BENCHMARK:START -->' "$README"; then
@@ -93,8 +144,8 @@ if grep -q '<!-- BENCHMARK:START -->' "$README"; then
         )"'|s' \
         "$README"
 else
-    echo "README has no <!-- BENCHMARK:START --> marker — appending results." >&2
+    echo "README has no <!-- BENCHMARK:START --> marker — appending." >&2
     printf '\n%s\n' "$BLOCK" >> "$README"
 fi
 
-echo "README updated: $README"
+echo "Done. README updated: $README"

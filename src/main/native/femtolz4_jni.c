@@ -139,14 +139,48 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
             /* Run of one repeated byte: fill is fastest. */
             memset(dst + op, dst[ms], (size_t)match_len);
         } else {
-            /* Overlap: copy `offset` bytes at a time so earlier output
-               bytes are replicated forward (like a SIMD splat). */
-            int64_t i = 0;
-            while (i + offset <= match_len) {
-                memcpy(dst + op + i, dst + ms + i, (size_t)offset);
-                i += offset;
+            /* Overlapping match (offset < match_len, offset >= 2):
+               Build up a 16-byte tile by doubling the pattern, then
+               blast forward with 16-byte copies.  The key property:
+               after each copy step dst[op..op+copied-1] = the tiled
+               pattern, so reading from dst[op+copied-16..] is valid. */
+            uint8_t *d  = dst + op;
+            int64_t rem = match_len;
+            int64_t c   = 0;
+
+            /* Prime: copy the first `offset` bytes from source. */
+            __builtin_memcpy(d, dst + ms, (size_t)offset);
+            c = offset;
+
+            /* Double until c >= 8 or we'd exceed rem. */
+            while (c < 8 && c + c <= rem) {
+                __builtin_memcpy(d + c, d, (size_t)c);
+                c += c;
             }
-            memcpy(dst + op + i, dst + ms + i, (size_t)(match_len - i));
+            /* Extend to 8 if not there yet (and rem allows). */
+            if (c < 8 && rem >= 8) {
+                __builtin_memcpy(d + c, d, (size_t)(8 - c));
+                c = 8;
+            }
+            /* Extend to 16. */
+            if (c < 16 && rem >= 16) {
+                __builtin_memcpy(d + c, d, (size_t)(16 - c));
+                c = 16;
+            }
+
+            /* Blast: 16-byte copies reading from the previous 16 bytes. */
+            while (c + 16 <= rem) {
+                __builtin_memcpy(d + c, d + c - 16, 16);
+                c += 16;
+            }
+
+            /* Tail: fill the remaining < 16 bytes from the start of the tile. */
+            if (c < rem) {
+                /* c >= 8 here (either via the extend steps or because offset >= 8),
+                   or c == offset if rem < 8; in both cases d[0..min(c,16)-1] holds
+                   a valid tiled pattern, so mod-wrapping via (rem-c) is safe. */
+                __builtin_memcpy(d + c, d, (size_t)(rem - c));
+            }
         }
         op += (int)match_len;
     }

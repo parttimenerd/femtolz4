@@ -267,7 +267,28 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
     memcpy(&pos4, src + pos, 4);
     uint32_t h = lz4__hash4v(pos4);
 
+    /* Adaptive skip for incompressible regions.
+       After 128 consecutive miss-bytes, activate skip mode: advance by step
+       without inserting skipped positions into htab (faster on random data).
+       skip_ctr is a packed counter: step = (skip_ctr >> 6) + 1, max ~17. */
+    int miss_bytes = 0;
+    int skip_ctr   = 2 << 6;
+
     while (pos < loop_end) {
+        /* Adaptive skip: once we've seen 128 consecutive miss-bytes without a
+           match, jump forward by an increasing step (up to ~17 bytes), only
+           landing on the new position without inserting the skipped slots. */
+        if (__builtin_expect(miss_bytes >= 128, 0)) {
+            int step = (skip_ctr >> 6) + 1;
+            if (skip_ctr < (17 << 6)) skip_ctr++;
+            pos += step;
+            miss_bytes += step;
+            if (__builtin_expect(pos >= loop_end, 0)) break;
+            memcpy(&pos4, src + pos, 4);
+            h = lz4__hash4v(pos4);
+            /* fall through: still probe the landing position */
+        }
+
         /* Step A: look up htab for pos, then speculatively start pos+1 lookup
            so its htab cache line has time to arrive before we need it. */
         uint64_t slot = htab[h];
@@ -295,6 +316,8 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             int match_len  = lz4__extend_match(src, (int)sv, pos, max_match);
 
             if (match_len >= MIN_MATCH) {
+                miss_bytes = 0;
+                skip_ctr   = 2 << 6;
                 int match_extra = match_len - MIN_MATCH;
                 lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
                 { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
@@ -333,6 +356,8 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             int match_len1  = lz4__extend_match(src, (int)sv1, pos, max_match1);
 
             if (match_len1 >= MIN_MATCH) {
+                miss_bytes = 0;
+                skip_ctr   = 2 << 6;
                 int match_extra1 = match_len1 - MIN_MATCH;
                 lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra1);
                 { uint16_t off16 = (uint16_t)match_dist1; memcpy(dst + op, &off16, 2); }
@@ -349,6 +374,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         }
 
         /* Both pos and pos+1 missed — advance pos+1 → pos+2 for next iteration. */
+        miss_bytes += 2;
         pos++;
         memcpy(&pos4, src + pos, 4);       /* safe: pos < loop_end < src_len - 4 */
         h = lz4__hash4v(pos4);
@@ -380,17 +406,28 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
     int lit_start = 0;
     int pos       = 0;
     int safe_end  = src_len - PADDING_LITERALS;
+    int miss_bytes = 0;
+    int skip_ctr   = 2 << 6;
 
-    /* ── chain>1: hash chain, lazy matching, no skip ── */
+    /* ── chain>1: hash chain, lazy matching, adaptive skip ── */
     while (pos < src_len) {
+        /* Adaptive skip: in incompressible runs, jump forward without inserting
+           skipped positions — mirrors the Java compressJavaImpl skip logic. */
+        if (__builtin_expect(miss_bytes >= 128, 0)) {
+            int step = (skip_ctr >> 6) + 1;
+            if (skip_ctr < (17 << 6)) skip_ctr++;
+            pos += step;
+            miss_bytes += step;
+            if (pos >= src_len) break;
+        }
+
         int match_dist = 0;
         int match_len  = lz4__insert_and_match(s, src, pos, src_len, max_chain, &match_dist);
 
         int lazy_probed = 0;
         /* Lazy matching: probe pos+1 only when match is short enough to benefit.
-           Long matches are rarely improved by one position of lookahead, so skip
-           the second search when the current match already covers ≥64 bytes. */
-        if (match_len >= MIN_MATCH && match_len < 64 && pos + 1 < src_len) {
+           Long matches (≥8 bytes) are rarely improved by one position of lookahead. */
+        if (match_len >= MIN_MATCH && match_len < 8 && pos + 1 < src_len) {
             int lazy_dist  = 0;
             int lazy_chain = max_chain < 2 ? max_chain : 2;
             int lazy_len   = lz4__insert_and_match(s, src, pos + 1, src_len, lazy_chain, &lazy_dist);
@@ -404,6 +441,8 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
         }
 
         if (match_len >= MIN_MATCH) {
+            miss_bytes = 0;
+            skip_ctr   = 2 << 6;
             int match_extra = match_len - MIN_MATCH;
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
             { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
@@ -418,6 +457,7 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
                 lz4__insert(s, src, ip);
             pos = lit_start;
         } else {
+            miss_bytes++;
             pos++;
         }
     }
