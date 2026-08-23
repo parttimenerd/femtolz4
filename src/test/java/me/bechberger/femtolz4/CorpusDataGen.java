@@ -31,7 +31,6 @@ public final class CorpusDataGen {
         writeCorpus(outDir, "rle-20m.bin", new byte[20 * MB]);
         writeCorpus(outDir, "offset4-20m.bin", repeat(new byte[] {1, 2, 3, 4}, 20 * MB));
         writeCorpus(outDir, "offset16-20m.bin", repeat(random(16, 0x16161616L), 20 * MB));
-        writeCorpus(outDir, "words-10m.bin", words(10 * MB));
     }
 
     private static void writeCorpus(Path outDir, String name, byte[] data) throws Exception {

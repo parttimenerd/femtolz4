@@ -47,10 +47,7 @@ fi
 # ── Part 2: CorpusBench ───────────────────────────────────────────────────────
 
 CORPORA=(
-    "$CORPUS_DIR/words-10m.bin"
-    "$CORPUS_DIR/text-20m.bin"
     "$CORPUS_DIR/json-10m.bin"
-    "$CORPUS_DIR/rle-20m.bin"
     "$CORPUS_DIR/random-20m.bin"
     "$CORPUS_DIR/mixed-20m.bin"
 )

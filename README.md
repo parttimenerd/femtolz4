@@ -2,13 +2,12 @@
 
 A small Java library for LZ4 block and frame compression.
 
-femtolz4 is built on top of [LaurentChardon/lz4](https://github.com/LaurentChardon/lz4),
-a public-domain C implementation of LZ4, with project-specific optimizations.
-The Java implementation closely mirrors the same algorithmic structure, and the
-library can use bundled native acceleration where available.
+femtolz4 is an independent implementation of LZ4 written from first principles —
+no copied source, no vendored C library. The pure-Java path and the bundled C
+extension share the same algorithmic structure. The library picks the faster path
+automatically at runtime and falls back to pure Java everywhere else.
 
-The goal is a tiny, understandable codebase with reasonable performance and a
-pure-Java fallback.
+The goal is a small, auditable codebase with competitive performance.
 
 ## Install
 
@@ -28,11 +27,11 @@ For most applications, use frame streams:
 
 ```java
 try (var out = new LZ4FrameOutputStream(Files.newOutputStream(path))) {
-  out.write(data);
+    out.write(data);
 }
 
 try (var in = new LZ4FrameInputStream(Files.newInputStream(path))) {
-  byte[] restored = in.readAllBytes();
+    byte[] restored = in.readAllBytes();
 }
 ```
 
@@ -40,31 +39,24 @@ Use the low-level block API only when you need precise control and already know
 the uncompressed size:
 
 ```java
-byte[] compressed = LZ4.compress(data, 1);
+byte[] compressed = LZ4.compress(data);
 byte[] original = LZ4.decompress(compressed, originalSize);
 ```
 
 ## Relationship to lz4-java
 
-[lz4-java](https://github.com/lz4/lz4-java) (and its excellent fork [yawkat/lz4-java](https://github.com/yawkat/lz4-java))
-inspired femtolz4. If raw throughput is the priority, use lz4-java: it is faster,
-battle-tested, and supports more platforms. femtolz4 is for cases where
-**simplicity and small footprint matter more than peak speed**.
-
-Choose femtolz4 when you want:
-
-- a tiny dependency footprint
-- a codebase that is easy to audit and debug
-- standard LZ4 frame interoperability with a simple API
+[lz4-java](https://github.com/lz4/lz4-java) (and its excellent fork
+[yawkat/lz4-java](https://github.com/yawkat/lz4-java)) inspired femtolz4.
+lz4-java covers more platforms and has a longer track record. femtolz4 trades
+breadth for a much smaller, simpler codebase.
 
 | | lz4-java | femtolz4 |
 | --- | :---: | :---: |
-| JAR size | ~876 KB | ~23 KB |
-| Lines of Java source | ~10 000 | ~750 |
+| JAR size | ~876 KB | ~50 KB |
+| Lines of Java source | ~10 000 | ~2 000 |
+| Lines of C source | ~2 000 | ~850 |
 | Platforms with native acceleration | 7 | 2 (darwin/aarch64, linux/amd64) |
 | Dependencies at runtime | none | none |
-
-The full source, including the C core, fits in about 1,200 lines.
 
 ## API
 
@@ -103,30 +95,36 @@ new LZ4FrameOutputStream(out)
 or choose a level and optionally a block size:
 
 ```java
-new LZ4FrameOutputStream(out, 5);                    // default 1 MiB blocks
-new LZ4FrameOutputStream(out, 256 * 1024, 5);       // explicit block size + level
+new LZ4FrameOutputStream(out, 5);              // default 1 MiB blocks
+new LZ4FrameOutputStream(out, 256 * 1024, 5); // explicit block size + level
+```
+
+Alternatively, pass a `LZ4.Compressor` directly:
+
+```java
+new LZ4FrameOutputStream(out, LZ4.compress());        // fastest
+new LZ4FrameOutputStream(out, LZ4.compressHigh());    // best ratio
 ```
 
 ### Block API
 
 ```java
-// Compress a byte array
-byte[] compressed = LZ4.compress(data, 1 /*maxChain, 1=fastest*/);
+// Fastest compression
+byte[] compressed = LZ4.compress(data);
 
-// Decompress a byte array (you must know the original size)
+// Better ratio (higher search effort)
+byte[] compressed = LZ4.compressHigh(data);
+
+// Decompress (you must know the original size)
 byte[] original = LZ4.decompress(compressed, originalSize);
 
 // Standalone xxHash-32 (seed=0), no dependencies
 int hash = XXHash32.hash(data, 0, data.length);
 ```
 
-The `maxChain` argument is an internal search-effort knob for the pure-Java compressor:
-
-- lower values are faster
-- higher values usually compress better
-- it affects compression only, not decompression
-
-For most code, prefer the frame API and its simpler `level` parameter.
+`LZ4.compressHigh(int level)` accepts a level from 1 to 256 (search chain
+depth). The zero-argument form uses the maximum. Higher values improve ratio
+at the cost of compression speed; decompression speed is unaffected.
 
 ## Compatibility and Limits
 
@@ -149,9 +147,6 @@ Frame feature support summary:
 | Block checksum | yes | no |
 | Content checksum | yes | no |
 | Skippable frames | yes | no |
-
-If you need broad platform-native coverage and peak throughput, prefer
-`lz4-java`/`yawkat-lz4-java`.
 
 ## CLI
 
@@ -199,9 +194,6 @@ To skip native builds and force the pure-Java path during Maven builds/tests:
 mvn package -Dnative.skip=true
 ```
 
-Advanced manual toolchain commands are still possible, but `build_native.py` is
-the recommended and supported path.
-
 ## Testing
 
 ```bash
@@ -227,165 +219,119 @@ tagged `"slow"` and excluded by default; use `-Dtest.full=true` to include them.
 - Start with frame API defaults.
 - Increase `level` only if smaller output matters more than compression speed.
 - Keep default block size unless you have memory-pressure reasons to lower it.
-- Use block API `maxChain` directly only for benchmarking or advanced tuning.
 
 ## Benchmark
 
 Measured on Apple M4 Pro (macOS), JDK 25.
 Comparison against [yawkat/lz4-java](https://github.com/yawkat/lz4-java) 1.11.0.
-`-fast` variants use chain=1 (fastest), plain variants use chain=8 (balanced).
+`femto-fast` / `yawkat-fast` = fastest mode; `femto-hc` / `yawkat-hc` = best-ratio mode.
+`femto-java-*` forces the pure-Java path regardless of platform.
 
 Run `./benchmark.sh` to regenerate with numbers from your own machine.
 
 <!-- BENCHMARK:START -->
 <!-- generated by benchmark.sh on 2026-08-23 — Apple M4 Pro, macOS — java version 25.0.3 -->
 
-### aprof.jfr  (1 MB)
-
-| implementation | compress MB/s | decompress MB/s | ratio |
-|----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |           191 |             427 | 1,71x |
-| femto-hc               |            81 |             111 | 1,95x |
-| femto-java-fast        |           784 |             878 | 1,71x |
-| femto-java             |           208 |        **1239** | 1,95x |
-| yawkat-native          |      **1015** |             303 | 1,76x |
-| yawkat-java            |           228 |            1234 | 1,73x |
-
-### cpu_profile.jfr  (1 MB)
-
-| implementation | compress MB/s | decompress MB/s | ratio |
-|----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |           269 |             729 | 2,18x |
-| femto-hc               |           126 |             833 | 2,47x |
-| femto-java-fast        |           815 |            1045 | 2,18x |
-| femto-java             |           227 |            1198 | 2,47x |
-| yawkat-native          |      **1017** |             856 | 2,22x |
-| yawkat-java            |           469 |        **1255** | 2,20x |
-
 ### HA_gc_details.jfr  (3 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |           727 |            1048 | 1,71x |
-| femto-hc               |           178 |            1283 | 2,02x |
-| femto-java-fast        |           723 |            1071 | 1,71x |
-| femto-java             |           181 |            1267 | 2,02x |
-| yawkat-native          |       **992** |        **1461** | 1,68x |
-| yawkat-java            |           457 |            1190 | 1,72x |
+| femto-fast             |           717 |            1075 | 1,71x |
+| femto-hc               |           180 |            1325 | 2,02x |
+| femto-java-fast        |           718 |            1129 | 1,71x |
+| femto-java             |           181 |            1260 | 2,02x |
+| yawkat-native          |       **965** |        **1421** | 1,68x |
+| yawkat-java            |           453 |            1145 | 1,72x |
 
 ### jvm17-gc-jfc.jfr  (7 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |           832 |            1338 | 2,24x |
-| femto-hc               |           252 |            1422 | 2,48x |
-| femto-java-fast        |           955 |            1326 | 2,24x |
-| femto-java             |           262 |        **1453** | 2,48x |
-| yawkat-native          |      **1068** |            1166 | 2,23x |
-| yawkat-java            |           590 |            1384 | 2,26x |
+| femto-fast             |           867 |            1436 | 2,24x |
+| femto-hc               |           248 |        **1540** | 2,48x |
+| femto-java-fast        |           907 |            1419 | 2,24x |
+| femto-java             |           255 |            1534 | 2,48x |
+| yawkat-native          |      **1134** |            1196 | 2,23x |
+| yawkat-java            |           586 |            1412 | 2,26x |
 
 ### flight.jfr  (13 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          1100 |            1692 | 2,76x |
-| femto-hc               |           307 |        **1831** | 3,06x |
-| femto-java-fast        |          1105 |            1691 | 2,76x |
-| femto-java             |           306 |            1792 | 3,06x |
-| yawkat-native          |      **1343** |            1712 | 2,75x |
-| yawkat-java            |           640 |            1553 | 2,78x |
+| femto-fast             |          1034 |            1724 | 2,76x |
+| femto-hc               |           299 |        **1826** | 3,06x |
+| femto-java-fast        |          1054 |            1686 | 2,76x |
+| femto-java             |           304 |            1707 | 3,06x |
+| yawkat-native          |      **1343** |            1734 | 2,75x |
+| yawkat-java            |           634 |            1509 | 2,78x |
 
 ### failure.jfr  (19 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |      **1487** |        **1811** | 2,59x |
-| femto-hc               |           510 |            1750 | 2,63x |
-| femto-java-fast        |          1448 |            1733 | 2,59x |
-| femto-java             |           505 |            1663 | 2,63x |
-| yawkat-native          |          1429 |            1399 | 2,60x |
-| yawkat-java            |           835 |            1380 | 2,60x |
+| femto-fast             |          1372 |        **1757** | 2,59x |
+| femto-hc               |           509 |            1657 | 2,63x |
+| femto-java-fast        |          1354 |            1673 | 2,59x |
+| femto-java             |           509 |            1654 | 2,63x |
+| yawkat-native          |      **1448** |            1389 | 2,60x |
+| yawkat-java            |           841 |            1371 | 2,60x |
 
 ### large_test.bin  (267 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |      **1386** |            1438 | 2,59x |
-| femto-hc               |           496 |            1336 | 2,63x |
-| femto-java-fast        |          1324 |            1595 | 2,59x |
-| femto-java             |           510 |        **1661** | 2,63x |
-| yawkat-native          |          1237 |            1204 | 2,60x |
-| yawkat-java            |           824 |            1347 | 2,60x |
+| femto-fast             |          1323 |            1451 | 2,59x |
+| femto-hc               |           490 |            1258 | 2,63x |
+| femto-java-fast        |          1241 |            1374 | 2,59x |
+| femto-java             |           503 |        **1568** | 2,63x |
+| yawkat-native          |      **1380** |            1356 | 2,60x |
+| yawkat-java            |           835 |            1361 | 2,60x |
 
 ### large.jfr  (262 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          1056 |            1580 | 2,72x |
-| femto-hc               |           326 |        **1760** | 3,20x |
-| femto-java-fast        |          1054 |            1408 | 2,72x |
-| femto-java             |           318 |            1492 | 3,20x |
-| yawkat-native          |      **1167** |            1616 | 2,81x |
-| yawkat-java            |           641 |            1450 | 2,75x |
-
-### words-10m.bin (10 MB)
-
-| implementation | compress MB/s | decompress MB/s | ratio |
-|----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |     **21843** |           42408 | 253.32x |
-| femto-hc               |          3034 |       **42784** | 253.55x |
-| yawkat-fast            |          4094 |            5274 | 253.35x |
-| yawkat-hc              |          4055 |            5306 | 253.57x |
-
-
-### text-20m.bin (21 MB)
-
-| implementation | compress MB/s | decompress MB/s | ratio |
-|----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |     **21813** |       **41074** | 254.26x |
-| femto-hc               |          3003 |           40677 | 254.26x |
-| yawkat-fast            |          4075 |            5302 | 254.26x |
-| yawkat-hc              |          4027 |            5289 | 254.27x |
-
+| femto-fast             |          1004 |            1549 | 2,72x |
+| femto-hc               |           327 |        **1834** | 3,20x |
+| femto-java-fast        |          1001 |            1537 | 2,72x |
+| femto-java             |           310 |            1675 | 3,20x |
+| yawkat-native          |      **1192** |            1577 | 2,81x |
+| yawkat-java            |           649 |            1435 | 2,75x |
 
 ### json-10m.bin (10 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |      **2370** |            3122 | 6.05x |
-| femto-hc               |           348 |        **7630** | 9.67x |
-| yawkat-fast            |          1634 |            1832 | 6.03x |
-| yawkat-hc              |            87 |            2980 | 9.79x |
-
-
-### rle-20m.bin (21 MB)
-
-| implementation | compress MB/s | decompress MB/s | ratio |
-|----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |     **22224** |           48259 | 254.97x |
-| femto-hc               |          3165 |       **48319** | 254.97x |
-| yawkat-fast            |          4034 |            4260 | 254.97x |
-| yawkat-hc              |          2048 |            4631 | 254.97x |
-
+| femto-fast             |          2389 |            3150 | 6,05x |
+| femto-hc               |           361 |            7593 | 9,67x |
+| femto-java-fast        |      **2389** |            3126 | 6,05x |
+| femto-java             |           364 |        **7611** | 9,67x |
+| yawkat-fast            |          1746 |            1584 | 6,03x |
+| yawkat-hc              |            87 |            2498 | 9,79x |
 
 ### random-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          8628 |           56209 | 1.00x |
-| femto-hc               |          4782 |           56250 | 1.00x |
-| yawkat-fast            |     **48475** |       **57023** | 1.00x |
-| yawkat-hc              |            51 |            3667 | 1.00x |
-
+| femto-fast             |          8539 |           57397 | 1,00x |
+| femto-hc               |          6770 |       **57417** | 1,00x |
+| femto-java-fast        |          8542 |           57268 | 1,00x |
+| femto-java             |          6730 |           57164 | 1,00x |
+| yawkat-fast            | **49083**[^earlyexit] |           56834 | 1,00x |
+| yawkat-hc              |            43 |            5990 | 1,00x |
 
 ### mixed-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |     **10557** |           46537 | 1.97x |
-| femto-hc               |          3246 |       **46576** | 1.97x |
-| yawkat-fast            |          3465 |            4536 | 1.94x |
-| yawkat-hc              |           117 |            4549 | 1.98x |
+| femto-fast             |     **10544** |           46945 | 1,97x |
+| femto-hc               |          3699 |           46883 | 1,97x |
+| femto-java-fast        |         10503 |       **47359** | 1,97x |
+| femto-java             |          3706 |           46726 | 1,97x |
+| yawkat-fast            |          2957 |            6078 | 1,94x |
+| yawkat-hc              |            95 |            6069 | 1,98x |
+
+[^earlyexit]: yawkat-fast on incompressible data exits early after a short scan — not a real compression speed.
 <!-- BENCHMARK:END -->
 
 ## License

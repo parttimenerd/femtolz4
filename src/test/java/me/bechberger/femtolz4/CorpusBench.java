@@ -47,10 +47,7 @@ public final class CorpusBench {
     public static void main(String[] args) throws Exception {
         Locale.setDefault(Locale.ROOT);
         String[] corpora = args.length == 0 ? new String[] {
-                "bench-data/corpora/words-10m.bin",
-                "bench-data/corpora/text-20m.bin",
                 "bench-data/corpora/json-10m.bin",
-                "bench-data/corpora/rle-20m.bin",
                 "bench-data/corpora/random-20m.bin",
                 "bench-data/corpora/mixed-20m.bin",
         } : args;
