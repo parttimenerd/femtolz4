@@ -256,13 +256,13 @@ public final class LZ4FrameInputStream extends InputStream {
     }
 
     private static int bdToBlockSize(int field) {
-        switch (field) {
-            case 4: return   64 * 1024;
-            case 5: return  256 * 1024;
-            case 6: return 1024 * 1024;
-            case 7: return 4 * 1024 * 1024;
-            default: throw new LZ4Exception("unknown BD block-size field: " + field);
-        }
+        return switch (field) {
+            case 4 -> 64 * 1024;
+            case 5 -> 256 * 1024;
+            case 6 -> 1024 * 1024;
+            case 7 -> 4 * 1024 * 1024;
+            default -> throw new LZ4Exception("unknown BD block-size field: " + field);
+        };
     }
 
     private void verifyContentChecksum() throws IOException {

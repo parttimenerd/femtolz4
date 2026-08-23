@@ -6,25 +6,12 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
- * lz4-java-compatible factory API for femtolz4, and pure-Java bypass methods
- * for benchmarking and testing.
+ * Pure-Java LZ4 implementation and lz4-java-compatible factory methods.
  *
- * <p><b>Migration from lz4-java:</b> Replace:
- * <pre>{@code
- * LZ4Factory f = LZ4Factory.fastestInstance();
- * LZ4Compressor       c = f.fastCompressor();
- * LZ4FastDecompressor d = f.fastDecompressor();
- * }</pre>
- * with:
- * <pre>{@code
- * LZ4.Compressor   c = LZ4Java.fastCompressor();
- * LZ4.Decompressor d = LZ4Java.fastDecompressor();
- * }</pre>
+ * <p>All compress/decompress logic lives here. {@link LZ4} is the public dispatch layer.
  *
- * <p><b>Pure-Java bypass (benchmarking / testing):</b>
- * {@link #compressJava}, {@link #decompressJava}, and
- * {@link #decompressJavaWithMatchLowerBound} skip the native dispatch and
- * always run the Java implementation.
+ * <p><b>lz4-java migration:</b> replace {@code LZ4Factory.fastestInstance().fastCompressor()}
+ * with {@code LZ4Java.fastCompressor()} (or {@code LZ4.compress()}).
  */
 public final class LZ4Java {
 
@@ -42,48 +29,24 @@ public final class LZ4Java {
     private static final int PADDING         = 5;
     private static final int NIL             = Integer.MIN_VALUE;
 
-    /* 12-bit fast table (long[4096] = 32 KB) fits in L1 on all platforms. */
+    /* 12-bit fast table: long[4096] packed as (value<<32|pos), sentinel = negative pos. */
     private static final int HASH_BITS_FAST  = 12;
     private static final int HASH_SIZE_FAST  = 1 << HASH_BITS_FAST;
+    private static final long FAST_SENTINEL  = 0x8080808080808080L;
 
-    /* Sentinel: negative position (bit 31 set) so the window check always fails. */
-    private static final long FAST_SENTINEL = 0x8080808080808080L;
-
-    /*
-     * Fast-path hash table: long[4096] storing packed (value<<32|pos).
-     * bits[63:32] = 4-byte src value at pos, bits[31:0] = position as signed int.
-     * Reset to FAST_SENTINEL before each block.
-     */
-    private static final ThreadLocal<long[]> TL_FAST_HEAD = ThreadLocal.withInitial(() -> {
-        long[] t = new long[HASH_SIZE_FAST];
-        Arrays.fill(t, FAST_SENTINEL);
-        return t;
+    /* Thread-local tables — reused per call to avoid allocation. */
+    private static final ThreadLocal<long[]> TL_FAST_HEAD  = ThreadLocal.withInitial(() -> {
+        long[] t = new long[HASH_SIZE_FAST]; Arrays.fill(t, FAST_SENTINEL); return t;
     });
-
-    /*
-     * 2-way associative fast-path table: long[HASH_SIZE_FAST * 2].
-     * Each bucket holds 2 slots (LRU eviction). Gives ~2.60x ratio vs chain=1's 2.59x
-     * at ~880 MB/s vs chain=1's 1530 MB/s — useful middle-ground between maxChain=1 and maxChain=2.
-     * Activated by maxChain=0 (compressJavaImpl dispatch).
-     */
-    private static final ThreadLocal<long[]> TL_FAST2_HEAD  = ThreadLocal.withInitial(() -> {
-        long[] t = new long[HASH_SIZE_FAST * 2];
-        Arrays.fill(t, FAST_SENTINEL);
-        return t;
+    /* 2-way associative: two slots per bucket (LRU). Slightly better ratio than chain=1. */
+    private static final ThreadLocal<long[]> TL_FAST2_HEAD = ThreadLocal.withInitial(() -> {
+        long[] t = new long[HASH_SIZE_FAST * 2]; Arrays.fill(t, FAST_SENTINEL); return t;
     });
-
-    /*
-     * Chain-path tables: reused across calls to avoid allocation per block.
-     * head[] must be filled with NIL before each call.
-     * tail[] need not be initialized: only slots reachable from a valid head[] entry are read.
-     */
+    /* Chain tables: head[] filled NIL before each block; tail[] only read from valid heads. */
     private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
     private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
 
-    /* Reusable compress output buffer — avoids allocation on every call. */
-    static final ThreadLocal<byte[]> TL_DST = ThreadLocal.withInitial(() -> new byte[0]);
-
-    /* Reusable decompress output buffer — grows to high-water mark, never shrinks. */
+    static final ThreadLocal<byte[]> TL_DST   = ThreadLocal.withInitial(() -> new byte[0]);
     private static final ThreadLocal<byte[]> TL_DECOMP = ThreadLocal.withInitial(() -> new byte[0]);
 
     // ── Sampling helpers ──────────────────────────────────────────────────────
@@ -170,14 +133,8 @@ public final class LZ4Java {
 
     /*
      * Chain compressor (maxChain >= 2).
-     *
-     * head[h]  = int position of most-recent entry at hash h (NIL = empty)
-     * tail[pos & WINDOW_MASK] = long packed as (value<<32)|nextPos
-     *   bits[63:32] = 4-byte src value at nextPos (avoids cold src[sv] load)
-     *   bits[31:0]  = nextPos as signed int (NIL sentinel when head[h]=NIL)
-     *
-     * On every chain walk step we only load tail[sv & MASK] — one 64-bit
-     * load — instead of also loading src[sv] (random L3 miss).
+     * head[h] = most-recent position at hash h.
+     * tail[pos & MASK] = packed (value<<32|nextPos) — avoids a cold src[sv] load per chain step.
      */
     static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
                                 byte[] dst, int dstOff, int maxChain) {
@@ -242,7 +199,6 @@ public final class LZ4Java {
             int bestLen   = 0;
             int bestDist  = 0;
 
-            // Insert pos first
             int prev = head[h];
             tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
             head[h] = pos;
@@ -324,11 +280,9 @@ public final class LZ4Java {
                 skipCtr   = 2 << 6;
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
-                // Inline emit sequence
                 dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
                 if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
                 if (litLen > 0) {
-                    // Inline copyLiterals
                     if (litLen <= 32) {
                         if (litLen >= 16) {
                             LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
@@ -382,12 +336,7 @@ public final class LZ4Java {
         return op - dstOff;
     }
 
-    /*
-     * Unrolled chain=2 compressor. Probes exactly 2 chain entries (the head entry
-     * plus one step), with both tail[] loads issued back-to-back so out-of-order
-     * execution can overlap them. Lazy probe also limited to 2 chain entries.
-     * Semantically identical to compressJavaImpl with maxChain=2.
-     */
+    /* chain=2: unrolled 2-probe variant with back-to-back tail[] loads for OOO overlap. */
     private static int compressChain2(byte[] src, int srcOff, int srcLen,
                                       byte[] dst, int dstOff, boolean recoverMixedBoundary) {
         if (srcLen == 0) return 0;
@@ -420,7 +369,6 @@ public final class LZ4Java {
             int h     = (pos4 * 0x9E3779B9) >>> (32 - HASH_BITS);
             int limit = pos - WINDOW_SIZE;
 
-            // Insert pos into chain head
             int prev = head[h];
             tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
             head[h] = pos;
@@ -560,12 +508,7 @@ public final class LZ4Java {
         return op - dstOff;
     }
 
-    /*
-     * 2-way associative fast path (maxChain=0).
-     * Each bucket holds 2 slots. On lookup, check both; on insert, shift old slot0→slot1,
-     * new entry→slot0 (LRU eviction). Gives ~2.60x ratio vs chain=1's 2.59x at ~880 MB/s.
-     * Table: long[HASH_SIZE_FAST * 2] = 64KB. Reset to sentinel before each block.
-     */
+    /* maxChain=0: 2-way associative, 2 slots per bucket (LRU), slight ratio gain over chain=1. */
     private static int compressFast2Way(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
@@ -650,10 +593,10 @@ public final class LZ4Java {
                     if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                     litStart = pos + matchLen;
                     pos = litStart;
-                    if (pos >= safeEnd2) break outer;
+                    if (pos >= safeEnd2) break;
                     v4 = (int) INT_LE.get(src, pos);
                     h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                    continue outer;
+                    continue;
                 }
 
                 /* ── Step A miss: evaluate pos+1 ── */
@@ -662,7 +605,7 @@ public final class LZ4Java {
                 head[bi1 + 1] = ss0;
                 head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
                 pos++;
-                if (pos >= safeEnd2) { pos = srcEnd; break outer; }
+                if (pos >= safeEnd2) { pos = srcEnd; break; }
 
                 int svA = (int) ss0;
                 matchSv = -1; matchLen = 0;
@@ -713,10 +656,10 @@ public final class LZ4Java {
                     if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                     litStart = pos + matchLen;
                     pos = litStart;
-                    if (pos >= safeEnd2) break outer;
+                    if (pos >= safeEnd2) break;
                     v4 = (int) INT_LE.get(src, pos);
                     h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                    continue outer;
+                    continue;
                 }
 
                 /* Both pos and pos+1 missed — apply adaptive skip. */
@@ -729,7 +672,7 @@ public final class LZ4Java {
                     missBytes += step;
                     pos += step;
                 }
-                if (pos >= safeEnd2) { pos = srcEnd; break outer; }
+                if (pos >= safeEnd2) { pos = srcEnd; break; }
                 v4 = (int) INT_LE.get(src, pos);
                 h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
             }
@@ -744,12 +687,7 @@ public final class LZ4Java {
         return op - dstOff;
     }
 
-    /**
-     * chain=1 fast path using a thread-local long[] hash table.
-     * Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position (signed).
-     * Sentinel 0x8080808080808080L = empty (negative position).
-     * Table is filled with sentinel before each call.
-     */
+    /* chain=1: single-slot hash table, packed (value<<32|pos) sentinel. */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
@@ -762,10 +700,7 @@ public final class LZ4Java {
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
         int safeEnd2  = safeEnd - 1;
-        /* Skip counter for incompressible regions.
-           After 128 consecutive miss-bytes, activate yawkat-style skip (no insert of skipped
-           positions) to achieve 10x+ throughput on uncompressible data. Resets on any match.
-           Below the threshold the 2-step loop runs exactly as before — zero cost on JFR data. */
+        /* After 128 miss-bytes, skip with growing step (no insert); resets on match. */
         int missBytes = 0;
         int skipCtr   = 2 << 6;  // yawkat-style packed counter; step = (skipCtr >> 6) + 1
 
@@ -1007,10 +942,8 @@ public final class LZ4Java {
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /**
-     * Bounded parser for AArch64 fallback dispatch.
-     *
-     * <p>Checks a few early sequences and routes to native only when it sees
-     * an offset-1 match long enough to match the measured native win profile.
+     * Returns true if early sequences contain an offset-1 match long enough
+     * that the native NEON fill path beats the JIT (AArch64 dispatch heuristic).
      */
     static boolean hasLongOffsetOneInEarlySequences(byte[] src, int srcOff, int srcLen) {
         if (srcOff < 0 || srcLen <= 0 || srcOff > src.length - srcLen) return false;
@@ -1131,7 +1064,6 @@ public final class LZ4Java {
         if (offset == 1) {
             Arrays.fill(buf, dst, dst + len, buf[src]);
         } else if (offset == 2) {
-            /* Broadcast 2-byte pattern: replicate via 8-byte stores. */
             int s0 = buf[src] & 0xFF, s1 = buf[src + 1] & 0xFF;
             long v2 = s0 | (s1 << 8);
             long pattern = v2 | (v2 << 16) | (v2 << 32) | (v2 << 48);
@@ -1139,16 +1071,13 @@ public final class LZ4Java {
             while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
         } else if (offset == 4) {
-            /* Broadcast 4-byte pattern. */
             long v4 = (int) INT_LE.get(buf, src) & 0xFFFFFFFFL;
             long pattern = v4 | (v4 << 32);
             int d = dst, end = dst + len;
             while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
         } else if (offset >= 8) {
-            /* Forward copy in 16-byte strides when match is long enough.
-               src advances in lockstep with dst — after offset bytes, src reads
-               previously-written output (pattern expansion). */
+            /* src advances in lockstep — after offset bytes it reads previously-written output. */
             int d = dst, end = dst + len;
             while (d + 16 <= end) {
                 LONG_LE.set(buf, d,     (long) LONG_LE.get(buf, src));
@@ -1158,9 +1087,7 @@ public final class LZ4Java {
             while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, src)); src += 8; d += 8; }
             while (d < end) { buf[d++] = buf[src++]; }
         } else {
-            /* Offset 3..7: build an 8-byte tile then blast in 8-byte strides.
-               Copy `offset` bytes from src, double until ≥ 8, then
-               read from buf[d-8] to produce the repeating pattern forward. */
+            /* Offset 3..7: prime an 8-byte tile, then blast forward in 8-byte strides. */
             int d   = dst;
             int end = dst + len;
             for (int i = 0; i < offset; i++) buf[d + i] = buf[src + i];

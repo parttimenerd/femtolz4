@@ -244,137 +244,148 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |           203 |             454 | 1,71x |
-| femto-native           |            80 |             114 | 1,95x |
-| femto-java-fast        |           607 |             912 | 1,71x |
-| femto-java             |           212 |            1328 | 1,95x |
-| yawkat-native          |          1126 |             349 | 1,76x |
-| yawkat-java            |           542 |            1337 | 1,73x |
+| femto-fast             |           191 |             427 | 1,71x |
+| femto-hc               |            81 |             111 | 1,95x |
+| femto-java-fast        |           784 |             878 | 1,71x |
+| femto-java             |           208 |        **1239** | 1,95x |
+| yawkat-native          |      **1015** |             303 | 1,76x |
+| yawkat-java            |           228 |            1234 | 1,73x |
 
 ### cpu_profile.jfr  (1 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |           253 |            1014 | 2,18x |
-| femto-native           |           147 |            1192 | 2,47x |
-| femto-java-fast        |           364 |            1199 | 2,18x |
-| femto-java             |           212 |            1302 | 2,47x |
-| yawkat-native          |          1121 |             941 | 2,22x |
-| yawkat-java            |           518 |            1285 | 2,20x |
+| femto-fast             |           269 |             729 | 2,18x |
+| femto-hc               |           126 |             833 | 2,47x |
+| femto-java-fast        |           815 |            1045 | 2,18x |
+| femto-java             |           227 |            1198 | 2,47x |
+| yawkat-native          |      **1017** |             856 | 2,22x |
+| yawkat-java            |           469 |        **1255** | 2,20x |
 
 ### HA_gc_details.jfr  (3 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |           777 |            1207 | 1,71x |
-| femto-native           |           176 |            1333 | 2,02x |
-| femto-java-fast        |           758 |            1128 | 1,71x |
-| femto-java             |           188 |            1372 | 2,02x |
-| yawkat-native          |          1059 |            1492 | 1,68x |
-| yawkat-java            |           479 |            1309 | 1,72x |
+| femto-fast             |           727 |            1048 | 1,71x |
+| femto-hc               |           178 |            1283 | 2,02x |
+| femto-java-fast        |           723 |            1071 | 1,71x |
+| femto-java             |           181 |            1267 | 2,02x |
+| yawkat-native          |       **992** |        **1461** | 1,68x |
+| yawkat-java            |           457 |            1190 | 1,72x |
 
 ### jvm17-gc-jfc.jfr  (7 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |           963 |            1432 | 2,24x |
-| femto-native           |           231 |            1449 | 2,48x |
-| femto-java-fast        |           969 |            1431 | 2,24x |
-| femto-java             |           264 |            1525 | 2,48x |
-| yawkat-native          |          1171 |            1254 | 2,23x |
-| yawkat-java            |           579 |            1454 | 2,26x |
+| femto-fast             |           832 |            1338 | 2,24x |
+| femto-hc               |           252 |            1422 | 2,48x |
+| femto-java-fast        |           955 |            1326 | 2,24x |
+| femto-java             |           262 |        **1453** | 2,48x |
+| yawkat-native          |      **1068** |            1166 | 2,23x |
+| yawkat-java            |           590 |            1384 | 2,26x |
 
 ### flight.jfr  (13 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |          1130 |            1751 | 2,76x |
-| femto-native           |           318 |            1868 | 3,06x |
-| femto-java-fast        |          1107 |            1722 | 2,76x |
-| femto-java             |           311 |            1776 | 3,06x |
-| yawkat-native          |          1374 |            1777 | 2,75x |
-| yawkat-java            |           618 |            1562 | 2,78x |
+| femto-fast             |          1100 |            1692 | 2,76x |
+| femto-hc               |           307 |        **1831** | 3,06x |
+| femto-java-fast        |          1105 |            1691 | 2,76x |
+| femto-java             |           306 |            1792 | 3,06x |
+| yawkat-native          |      **1343** |            1712 | 2,75x |
+| yawkat-java            |           640 |            1553 | 2,78x |
 
 ### failure.jfr  (19 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |          1518 |            1697 | 2,59x |
-| femto-native           |           521 |            1672 | 2,63x |
-| femto-java-fast        |          1494 |            1649 | 2,59x |
-| femto-java             |           523 |            1658 | 2,63x |
-| yawkat-native          |          1451 |            1382 | 2,60x |
-| yawkat-java            |           834 |            1360 | 2,60x |
+| femto-fast             |      **1487** |        **1811** | 2,59x |
+| femto-hc               |           510 |            1750 | 2,63x |
+| femto-java-fast        |          1448 |            1733 | 2,59x |
+| femto-java             |           505 |            1663 | 2,63x |
+| yawkat-native          |          1429 |            1399 | 2,60x |
+| yawkat-java            |           835 |            1380 | 2,60x |
 
 ### large_test.bin  (267 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-native-fast      |          1493 |            1586 | 2,59x |
-| femto-native           |           510 |            1224 | 2,63x |
-| femto-java-fast        |          1361 |            1228 | 2,59x |
-| femto-java             |           503 |            1340 | 2,63x |
-| yawkat-native          |          1400 |            1428 | 2,60x |
-| yawkat-java            |           832 |            1407 | 2,60x |
+| femto-fast             |      **1386** |            1438 | 2,59x |
+| femto-hc               |           496 |            1336 | 2,63x |
+| femto-java-fast        |          1324 |            1595 | 2,59x |
+| femto-java             |           510 |        **1661** | 2,63x |
+| yawkat-native          |          1237 |            1204 | 2,60x |
+| yawkat-java            |           824 |            1347 | 2,60x |
+
+### large.jfr  (262 MB)
+
+| implementation | compress MB/s | decompress MB/s | ratio |
+|----------------|:-------------:|:---------------:|:-----:|
+| femto-fast             |          1056 |            1580 | 2,72x |
+| femto-hc               |           326 |        **1760** | 3,20x |
+| femto-java-fast        |          1054 |            1408 | 2,72x |
+| femto-java             |           318 |            1492 | 3,20x |
+| yawkat-native          |      **1167** |            1616 | 2,81x |
+| yawkat-java            |           641 |            1450 | 2,75x |
 
 ### words-10m.bin (10 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |         22285 |           43591 | 253.32x |
-| femto-hc               |          3104 |               - | 253.55x |
-| yawkat-fast            |          4151 |            5358 | 253.35x |
-| yawkat-hc              |          4123 |            5375 | 253.57x |
+| femto-fast             |     **21843** |           42408 | 253.32x |
+| femto-hc               |          3034 |       **42784** | 253.55x |
+| yawkat-fast            |          4094 |            5274 | 253.35x |
+| yawkat-hc              |          4055 |            5306 | 253.57x |
 
 
 ### text-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |         22225 |           41676 | 254.26x |
-| femto-hc               |          3057 |               - | 254.26x |
-| yawkat-fast            |          4150 |            5379 | 254.26x |
-| yawkat-hc              |          4177 |            5363 | 254.27x |
+| femto-fast             |     **21813** |       **41074** | 254.26x |
+| femto-hc               |          3003 |           40677 | 254.26x |
+| yawkat-fast            |          4075 |            5302 | 254.26x |
+| yawkat-hc              |          4027 |            5289 | 254.27x |
 
 
 ### json-10m.bin (10 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          2425 |            3252 | 6.05x |
-| femto-hc               |           372 |               - | 9.67x |
-| yawkat-fast            |          1716 |            1963 | 6.03x |
-| yawkat-hc              |            86 |            3039 | 9.79x |
+| femto-fast             |      **2370** |            3122 | 6.05x |
+| femto-hc               |           348 |        **7630** | 9.67x |
+| yawkat-fast            |          1634 |            1832 | 6.03x |
+| yawkat-hc              |            87 |            2980 | 9.79x |
 
 
 ### rle-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |         22773 |           53139 | 254.97x |
-| femto-hc               |          3308 |               - | 254.97x |
-| yawkat-fast            |          4120 |            4902 | 254.97x |
-| yawkat-hc              |          2099 |            5019 | 254.97x |
+| femto-fast             |     **22224** |           48259 | 254.97x |
+| femto-hc               |          3165 |       **48319** | 254.97x |
+| yawkat-fast            |          4034 |            4260 | 254.97x |
+| yawkat-hc              |          2048 |            4631 | 254.97x |
 
 
 ### random-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          7726 |           56709 | 1.00x |
-| femto-hc               |          7031 |               - | 1.00x |
-| yawkat-fast            |         49829 |           56137 | 1.00x |
-| yawkat-hc              |            44 |            3695 | 1.00x |
+| femto-fast             |          8628 |           56209 | 1.00x |
+| femto-hc               |          4782 |           56250 | 1.00x |
+| yawkat-fast            |     **48475** |       **57023** | 1.00x |
+| yawkat-hc              |            51 |            3667 | 1.00x |
 
 
-### large_test.bin (267 MB)
+### mixed-20m.bin (21 MB)
 
 | implementation | compress MB/s | decompress MB/s | ratio |
 |----------------|:-------------:|:---------------:|:-----:|
-| femto-fast             |          1450 |            1751 | 2.59x |
-| femto-hc               |           101 |               - | 2.75x |
-| yawkat-fast            |           830 |            1250 | 2.60x |
-| yawkat-hc              |            46 |            1161 | 2.78x |
+| femto-fast             |     **10557** |           46537 | 1.97x |
+| femto-hc               |          3246 |       **46576** | 1.97x |
+| yawkat-fast            |          3465 |            4536 | 1.94x |
+| yawkat-hc              |           117 |            4549 | 1.98x |
 <!-- BENCHMARK:END -->
 
 ## License

@@ -4,3 +4,4 @@ target/
 hs_err_pid*.log
 *.iml
 .idea/
+bench-data/

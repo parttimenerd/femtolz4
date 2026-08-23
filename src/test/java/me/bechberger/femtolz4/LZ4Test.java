@@ -53,8 +53,7 @@ class LZ4Test {
 
     @Test void asciiText() {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < 5000; i++) sb.append("The quick brown fox jumps over the lazy dog. ");
-        assertRoundTrip(sb.toString().getBytes(StandardCharsets.UTF_8), 1);
+        assertRoundTrip("The quick brown fox jumps over the lazy dog. ".repeat(5000).getBytes(StandardCharsets.UTF_8), 1);
     }
 
     @ParameterizedTest @ValueSource(ints = {1, 4, 8, 16, 64})

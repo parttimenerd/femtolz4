@@ -19,14 +19,18 @@ import java.util.*;
  */
 public class Benchmark {
 
+    static final String BENCH_DATA = System.getProperty("bench.data",
+        Path.of(System.getProperty("user.dir"), "bench-data").toString());
+
     static final String[] FILES = {
-        System.getProperty("user.home") + "/Downloads/aprof.jfr",          //  503 KB
-        System.getProperty("user.home") + "/Downloads/cpu_profile.jfr",    //  829 KB
-        System.getProperty("user.home") + "/Downloads/HA_gc_details.jfr",  //  3.2 MB
-        System.getProperty("user.home") + "/Downloads/jvm17-gc-jfc.jfr",   //  6.7 MB
-        System.getProperty("user.home") + "/Downloads/flight.jfr",         //   12 MB
-        System.getProperty("user.home") + "/Downloads/failure.jfr",        //   18 MB
-        "/tmp/large_test.bin",                                               // ~266 MB
+        BENCH_DATA + "/aprof.jfr",         //  503 KB
+        BENCH_DATA + "/cpu_profile.jfr",   //  829 KB
+        BENCH_DATA + "/HA_gc_details.jfr", //  3.2 MB
+        BENCH_DATA + "/jvm17-gc-jfc.jfr",  //  6.7 MB
+        BENCH_DATA + "/flight.jfr",        //   12 MB
+        BENCH_DATA + "/failure.jfr",       //   18 MB
+        BENCH_DATA + "/large_test.bin",    //  267 MB binary
+        BENCH_DATA + "/large.jfr",         //  250 MB JFR
     };
 
     static final int WARMUP_REPS  = 4;
@@ -42,18 +46,18 @@ public class Benchmark {
         byte[] decompress(byte[] comp, int originalLen);
     }
 
-    // ── femtolz4 fast (chain=1, matches yawkat fastCompressor) ───────────────
+    // ── femtolz4 dispatch (chain=1) ───────────────────────────────────────────
 
     static final Impl FEMTO_FAST = new Impl() {
-        public String name() { return LZ4.isNativeAvailable() ? "femto-native-fast" : "femto-java-fast"; }
+        public String name() { return "femto-fast"; }
         public byte[] compress(byte[] s) { return LZ4.compress(s, 1); }
         public byte[] decompress(byte[] c, int n) { return LZ4.decompress(c, n); }
     };
 
-    // ── femtolz4 normal (chain=8, matches yawkat fastCompressor default) ──────
+    // ── femtolz4 HC (chain=8) ─────────────────────────────────────────────────
 
     static final Impl FEMTO = new Impl() {
-        public String name() { return LZ4.isNativeAvailable() ? "femto-native" : "femto-java"; }
+        public String name() { return "femto-hc"; }
         public byte[] compress(byte[] s) { return LZ4.compress(s, 8); }
         public byte[] decompress(byte[] c, int n) { return LZ4.decompress(c, n); }
     };

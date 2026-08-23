@@ -47,13 +47,12 @@ public final class CorpusBench {
     public static void main(String[] args) throws Exception {
         Locale.setDefault(Locale.ROOT);
         String[] corpora = args.length == 0 ? new String[] {
-                "/tmp/femtolz4-corpora/words-10m.bin",
-                "/tmp/femtolz4-corpora/text-20m.bin",
-                "/tmp/large_test.bin",
-                "/tmp/femtolz4-corpora/json-10m.bin",
-                "/tmp/femtolz4-corpora/mixed-20m.bin",
-                "/tmp/femtolz4-corpora/random-20m.bin",
-                "/tmp/femtolz4-corpora/rle-20m.bin"
+                "bench-data/corpora/words-10m.bin",
+                "bench-data/corpora/text-20m.bin",
+                "bench-data/corpora/json-10m.bin",
+                "bench-data/corpora/rle-20m.bin",
+                "bench-data/corpora/random-20m.bin",
+                "bench-data/corpora/mixed-20m.bin",
         } : args;
 
         System.out.printf("META,impl=%s,nativeAvailable=%s,java=%s,arch=%s,warmMs=%d,measureMs=%d,trials=%d%n",
@@ -82,11 +81,9 @@ public final class CorpusBench {
                 emit("compress", name, src.length, maxChain, IMPL, comp,
                         (double) src.length / compressedLength, compressedLength);
 
-                if (maxChain == 1 || maxChain == 8) {
-                    Timing dec = benchmark(() -> decompress(compressed, compressedLength, restored), src.length);
-                    emit("decompress", name, src.length, maxChain, IMPL, dec,
-                            (double) src.length / compressedLength, compressedLength);
-                }
+                Timing dec = benchmark(() -> decompress(compressed, compressedLength, restored), src.length);
+                emit("decompress", name, src.length, maxChain, IMPL, dec,
+                        (double) src.length / compressedLength, compressedLength);
             }
 
             // ── yawkat comparison rows ────────────────────────────────────────
