@@ -15,11 +15,8 @@ import java.util.Arrays;
  */
 public final class LZ4Java {
 
-    // ── VarHandle accessors ────────────────────────────────────────────────────
     static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
-
-    // ── Implementation constants (private — not part of public API) ───────────
 
     static final int WINDOW_SIZE    = LZ4.WINDOW_SIZE;
     private static final int WINDOW_MASK     = WINDOW_SIZE - 1;
@@ -49,8 +46,6 @@ public final class LZ4Java {
     static final ThreadLocal<byte[]> TL_DST   = ThreadLocal.withInitial(() -> new byte[0]);
     private static final ThreadLocal<byte[]> TL_DECOMP = ThreadLocal.withInitial(() -> new byte[0]);
 
-    // ── Sampling helpers ──────────────────────────────────────────────────────
-
     /**
      * Count how many of 8 evenly-spaced 4-byte windows have the same value as
      * the window 4 positions earlier (offset-4 repeat pattern).
@@ -69,8 +64,6 @@ public final class LZ4Java {
         return count;
     }
 
-    // ── lz4-java-compatible factory methods ───────────────────────────────────
-
     /** Equivalent to lz4-java's {@code factory.fastCompressor()}. */
     public static LZ4.Compressor fastCompressor() { return LZ4.compress(); }
 
@@ -86,8 +79,6 @@ public final class LZ4Java {
 
     /** Equivalent to lz4-java's {@code factory.fastDecompressor()}. */
     public static LZ4.Decompressor fastDecompressor() { return LZ4.decompress(); }
-
-    // ── Pure-Java bypass ──────────────────────────────────────────────────────
 
     /** Pure-Java compress at chain=1, bypassing native. For benchmarking. */
     public static byte[] compressJava(byte[] src) {
@@ -128,8 +119,6 @@ public final class LZ4Java {
                                                         int matchLowerBound) {
         return decompressJavaImpl(src, srcOff, srcLen, dst, dstOff, dstLen, matchLowerBound);
     }
-
-    // ── Java compression implementation ───────────────────────────────────────
 
     /*
      * Chain compressor (maxChain >= 2).
@@ -203,7 +192,6 @@ public final class LZ4Java {
             tail[pos & WINDOW_MASK] = ((long) pos4 << 32) | (prev & 0xFFFFFFFFL);
             head[h] = pos;
 
-            // Walk chain from second entry
             for (int sv = prev; sv > limit; ) {
                 long tslot = tail[sv & WINDOW_MASK];
                 int  sv4   = (int)(tslot >>> 32);
@@ -237,7 +225,7 @@ public final class LZ4Java {
                 int lp4  = (int) INT_LE.get(src, lp);
                 int lh   = (lp4 * 0x9E3779B9) >>> (32 - HASH_BITS);
                 int llimit    = lp - WINDOW_SIZE;
-                int lchainLeft = Math.min(maxChain, 2);  /* cheap lookahead: 2 probes max */
+                int lchainLeft = Math.min(maxChain, 2);
                 int lazyLen   = 0;
                 int lazyDist  = 0;
 
@@ -281,28 +269,8 @@ public final class LZ4Java {
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
                 dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
-                if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
-                if (litLen > 0) {
-                    if (litLen <= 32) {
-                        if (litLen >= 16) {
-                            LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
-                            LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
-                            LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
-                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                        } else if (litLen >= 8) {
-                            LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
-                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                        } else if (litLen >= 4) {
-                            INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
-                            INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
-                        } else {
-                            for (int ci = 0; ci < litLen; ci++) dst[op + ci] = src[litStart + ci];
-                        }
-                    } else {
-                        System.arraycopy(src, litStart, dst, op, litLen);
-                    }
-                    op += litLen;
-                }
+                if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+                op = copyLiterals(src, litStart, dst, op, litLen);
                 dst[op++] = (byte)  matchDist;
                 dst[op++] = (byte) (matchDist >>> 8);
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
@@ -324,12 +292,9 @@ public final class LZ4Java {
                 pos++;
             }
         }
-        // pos is now past safeMain — just advance to srcEnd (tail bytes become literals)
-        if (pos < srcEnd) pos = srcEnd;
-
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4));
+            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -383,7 +348,6 @@ public final class LZ4Java {
             int bestLen  = 0;
             int bestDist = 0;
 
-            // Evaluate candidate sv1
             if (sv1 > limit) {
                 int sv4_1 = (int)(tslot1 >>> 32);
                 if (sv4_1 == pos4) {
@@ -391,7 +355,6 @@ public final class LZ4Java {
                     if (len > bestLen) { bestLen = len; bestDist = pos - sv1; }
                 }
 
-                // Evaluate candidate sv2 (second step in chain)
                 if (sv2 > limit && (bestLen == 0 || bestLen < safeEnd - pos)) {
                     int sv4_2 = (int)(tslot2 >>> 32);
                     if (sv4_2 == pos4 && (bestLen == 0 || src[sv2 + bestLen] == src[pos + bestLen])) {
@@ -457,27 +420,7 @@ public final class LZ4Java {
                 int matchExtra = matchLen - MIN_MATCH;
                 dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
                 if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
-                if (litLen > 0) {
-                    if (litLen <= 32) {
-                        if (litLen >= 16) {
-                            LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
-                            LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
-                            LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
-                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                        } else if (litLen >= 8) {
-                            LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
-                            LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                        } else if (litLen >= 4) {
-                            INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
-                            INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
-                        } else {
-                            for (int ci = 0; ci < litLen; ci++) dst[op + ci] = src[litStart + ci];
-                        }
-                    } else {
-                        System.arraycopy(src, litStart, dst, op, litLen);
-                    }
-                    op += litLen;
-                }
+                op = copyLiterals(src, litStart, dst, op, litLen);
                 dst[op++] = (byte)  matchDist;
                 dst[op++] = (byte) (matchDist >>> 8);
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
@@ -497,11 +440,9 @@ public final class LZ4Java {
                 pos++;
             }
         }
-        if (pos < srcEnd) pos = srcEnd;
-
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4));
+            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -532,9 +473,7 @@ public final class LZ4Java {
             while (pos < safeEnd2) {
                 int bi = h << 1;
 
-                /* ── Step A: evaluate pos ─────────────────────────── */
                 long s0 = head[bi], s1 = head[bi + 1];
-                /* Insert: shift s0→s1, new entry→s0 */
                 head[bi + 1] = s0;
                 head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
@@ -542,14 +481,12 @@ public final class LZ4Java {
                 int v4_1 = (int) INT_LE.get(src, pos + 1);
                 int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-                /* Try slot 0 */
                 int sv = (int) s0;
                 int matchSv = -1, matchLen = 0;
                 if (sv > pos - WINDOW_SIZE & (int)(s0 >>> 32) == v4) {
                     int len = extendMatch(src, sv, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = sv; matchLen = len; }
                 }
-                /* Try slot 1 only if slot 0 missed or slot 1 might be better */
                 int sv1 = (int) s1;
                 if (sv1 != sv && sv1 > pos - WINDOW_SIZE & (int)(s1 >>> 32) == v4) {
                     if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
@@ -567,27 +504,7 @@ public final class LZ4Java {
                     dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
                                        | (matchExtra < 15 ? matchExtra : 15));
                     if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                    if (litLen > 0) {
-                        if (litLen <= 32) {
-                            if (litLen >= 16) {
-                                LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
-                                LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
-                                LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
-                                LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                            } else if (litLen >= 8) {
-                                LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
-                                LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                            } else if (litLen >= 4) {
-                                INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
-                                INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
-                            } else {
-                                for (int i = 0; i < litLen; i++) dst[op + i] = src[litStart + i];
-                            }
-                        } else {
-                            System.arraycopy(src, litStart, dst, op, litLen);
-                        }
-                        op += litLen;
-                    }
+                    op = copyLiterals(src, litStart, dst, op, litLen);
                     dst[op++] = (byte) matchDist;
                     dst[op++] = (byte) (matchDist >>> 8);
                     if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
@@ -599,7 +516,6 @@ public final class LZ4Java {
                     continue;
                 }
 
-                /* ── Step A miss: evaluate pos+1 ── */
                 int bi1 = h1 << 1;
                 long ss0 = head[bi1], ss1 = head[bi1 + 1];
                 head[bi1 + 1] = ss0;
@@ -630,27 +546,7 @@ public final class LZ4Java {
                     dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
                                        | (matchExtra < 15 ? matchExtra : 15));
                     if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                    if (litLen > 0) {
-                        if (litLen <= 32) {
-                            if (litLen >= 16) {
-                                LONG_LE.set(dst, op,                (long) LONG_LE.get(src, litStart));
-                                LONG_LE.set(dst, op + 8,            (long) LONG_LE.get(src, litStart + 8));
-                                LONG_LE.set(dst, op + litLen - 16,  (long) LONG_LE.get(src, litStart + litLen - 16));
-                                LONG_LE.set(dst, op + litLen - 8,   (long) LONG_LE.get(src, litStart + litLen - 8));
-                            } else if (litLen >= 8) {
-                                LONG_LE.set(dst, op,                (long) LONG_LE.get(src, litStart));
-                                LONG_LE.set(dst, op + litLen - 8,   (long) LONG_LE.get(src, litStart + litLen - 8));
-                            } else if (litLen >= 4) {
-                                INT_LE.set(dst, op,                (int) INT_LE.get(src, litStart));
-                                INT_LE.set(dst, op + litLen - 4,   (int) INT_LE.get(src, litStart + litLen - 4));
-                            } else {
-                                for (int i = 0; i < litLen; i++) dst[op + i] = src[litStart + i];
-                            }
-                        } else {
-                            System.arraycopy(src, litStart, dst, op, litLen);
-                        }
-                        op += litLen;
-                    }
+                    op = copyLiterals(src, litStart, dst, op, litLen);
                     dst[op++] = (byte) matchDist;
                     dst[op++] = (byte) (matchDist >>> 8);
                     if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
@@ -702,14 +598,13 @@ public final class LZ4Java {
         int safeEnd2  = safeEnd - 1;
         /* After 128 miss-bytes, skip with growing step (no insert); resets on match. */
         int missBytes = 0;
-        int skipCtr   = 2 << 6;  // yawkat-style packed counter; step = (skipCtr >> 6) + 1
+        int skipCtr   = 2 << 6;
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
             int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
             while (pos < safeEnd2) {
-                /* ── Step A: evaluate pos ─────────────────────────── */
                 long slot = head[h];
                 head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
@@ -727,27 +622,7 @@ public final class LZ4Java {
                         dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
                                            | (matchExtra < 15 ? matchExtra : 15));
                         if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                        if (litLen > 0) {
-                            if (litLen <= 32) {
-                                if (litLen >= 16) {
-                                    LONG_LE.set(dst, op,           (long) LONG_LE.get(src, litStart));
-                                    LONG_LE.set(dst, op + 8,       (long) LONG_LE.get(src, litStart + 8));
-                                    LONG_LE.set(dst, op + litLen - 16, (long) LONG_LE.get(src, litStart + litLen - 16));
-                                    LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                                } else if (litLen >= 8) {
-                                    LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
-                                    LONG_LE.set(dst, op + litLen - 8,  (long) LONG_LE.get(src, litStart + litLen - 8));
-                                } else if (litLen >= 4) {
-                                    INT_LE.set(dst, op,               (int) INT_LE.get(src, litStart));
-                                    INT_LE.set(dst, op + litLen - 4,  (int) INT_LE.get(src, litStart + litLen - 4));
-                                } else {
-                                    for (int i = 0; i < litLen; i++) dst[op + i] = src[litStart + i];
-                                }
-                            } else {
-                                System.arraycopy(src, litStart, dst, op, litLen);
-                            }
-                            op += litLen;
-                        }
+                        op = copyLiterals(src, litStart, dst, op, litLen);
                         dst[op++] = (byte) matchDist;
                         dst[op++] = (byte) (matchDist >>> 8);
                         if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
@@ -760,13 +635,11 @@ public final class LZ4Java {
                     }
                 }
 
-                /* ── Step A miss: compute pos+1 hash, advance to pos+1 ── */
                 int v4_1 = (int) INT_LE.get(src, pos + 1);
                 int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
                 pos++;
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
-                /* ── Step B: evaluate pos+1 using hash computed above ── */
                 long slot1 = head[h1];
                 head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
 
@@ -784,27 +657,7 @@ public final class LZ4Java {
                         dst[op++] = (byte) (((litLen1 < 15 ? litLen1 : 15) << 4)
                                            | (matchExtra1 < 15 ? matchExtra1 : 15));
                         if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
-                        if (litLen1 > 0) {
-                            if (litLen1 <= 32) {
-                                if (litLen1 >= 16) {
-                                    LONG_LE.set(dst, op,               (long) LONG_LE.get(src, litStart));
-                                    LONG_LE.set(dst, op + 8,           (long) LONG_LE.get(src, litStart + 8));
-                                    LONG_LE.set(dst, op + litLen1 - 16, (long) LONG_LE.get(src, litStart + litLen1 - 16));
-                                    LONG_LE.set(dst, op + litLen1 - 8,  (long) LONG_LE.get(src, litStart + litLen1 - 8));
-                                } else if (litLen1 >= 8) {
-                                    LONG_LE.set(dst, op,                (long) LONG_LE.get(src, litStart));
-                                    LONG_LE.set(dst, op + litLen1 - 8,  (long) LONG_LE.get(src, litStart + litLen1 - 8));
-                                } else if (litLen1 >= 4) {
-                                    INT_LE.set(dst, op,                (int) INT_LE.get(src, litStart));
-                                    INT_LE.set(dst, op + litLen1 - 4,  (int) INT_LE.get(src, litStart + litLen1 - 4));
-                                } else {
-                                    for (int i = 0; i < litLen1; i++) dst[op + i] = src[litStart + i];
-                                }
-                            } else {
-                                System.arraycopy(src, litStart, dst, op, litLen1);
-                            }
-                            op += litLen1;
-                        }
+                        op = copyLiterals(src, litStart, dst, op, litLen1);
                         dst[op++] = (byte) matchDist1;
                         dst[op++] = (byte) (matchDist1 >>> 8);
                         if (matchExtra1 >= 15) op = writeOverflow(dst, op, matchExtra1 - 15);
@@ -817,13 +670,10 @@ public final class LZ4Java {
                     }
                 }
 
-                /* Both pos and pos+1 missed — check threshold for skip activation. */
                 if (missBytes < 128) {
-                    /* Still in compressible-data mode: exact 2-step (no skip). */
                     missBytes += 2;
                     pos++;
                 } else {
-                    /* Incompressible region: yawkat-style skip (no insert of skipped positions). */
                     int step = (skipCtr >> 6) + 1;
                     if (skipCtr < (17 << 6)) skipCtr++;
                     missBytes += step;
@@ -843,8 +693,6 @@ public final class LZ4Java {
         }
         return op - dstOff;
     }
-
-    // ── Java decompression implementation ─────────────────────────────────────
 
     static int decompressJavaImpl(byte[] src, int srcOff, int srcLen,
                                   byte[] dst, int dstOff, int dstLen,
@@ -938,8 +786,6 @@ public final class LZ4Java {
         }
         return op - dstOff;
     }
-
-    // ── Internal helpers ──────────────────────────────────────────────────────
 
     /**
      * Returns true if early sequences contain an offset-1 match long enough

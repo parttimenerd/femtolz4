@@ -21,10 +21,8 @@ import java.io.OutputStream;
  * The default constructor uses 1 MiB blocks and the fastest compression level.
  *
  * <p>The public compression knob is {@code level} from {@value #MIN_LEVEL} to
- * {@value #MAX_LEVEL}. Higher levels make compression spend more effort searching
- * for longer back-references, which usually improves compression ratio at the cost
- * of CPU time. Internally this is mapped to the lower-level {@code maxChain}
- * parameter used by {@link LZ4#compress(byte[], int, int, byte[], int, int)}.
+ * {@value #MAX_LEVEL}. Higher levels spend more effort searching for matches,
+ * improving ratio at the cost of CPU time.
  *
  * @see <a href="https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md">LZ4 frame format spec</a>
  */
@@ -49,7 +47,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
 
     private final OutputStream out;
     private final int blockSize;
-    private final int maxChain;
+    private final LZ4.Compressor compressor;
     private final byte[] inputBuf;
     private final byte[] compBuf;
     private int inputPos;
@@ -57,19 +55,32 @@ public final class LZ4FrameOutputStream extends OutputStream {
     private boolean closed;
 
     /**
+     * Wraps {@code out} using the given compressor and block size.
+     *
+     * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
+     */
+    public LZ4FrameOutputStream(OutputStream out, int blockSize, LZ4.Compressor compressor) {
+        this.out        = out;
+        this.blockSize  = validateBlockSize(blockSize);
+        this.compressor = compressor;
+        this.inputBuf   = new byte[this.blockSize];
+        this.compBuf    = new byte[LZ4.maxCompressedLength(this.blockSize)];
+    }
+
+    /** Wraps {@code out} using the given compressor and the default block size. */
+    public LZ4FrameOutputStream(OutputStream out, LZ4.Compressor compressor) {
+        this(out, DEFAULT_BLOCK_SIZE, compressor);
+    }
+
+    /**
      * Wraps {@code out} with the given block size and compression level.
      *
      * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
      * @param level compression level from {@value #MIN_LEVEL} (fastest) to
-     *              {@value #MAX_LEVEL} (best ratio). Higher levels search more
-     *              previous match candidates before emitting literals.
+     *              {@value #MAX_LEVEL} (best ratio)
      */
     public LZ4FrameOutputStream(OutputStream out, int blockSize, int level) {
-        this.out       = out;
-        this.blockSize = validateBlockSize(blockSize);
-        this.maxChain  = maxChainForLevel(level);
-        this.inputBuf  = new byte[this.blockSize];
-        this.compBuf   = new byte[LZ4.maxCompressedLength(this.blockSize)];
+        this(out, blockSize, LZ4.compressHigh(maxChainForLevel(level)));
     }
 
     /** Wraps {@code out} with the default block size and the given compression level. */
@@ -125,7 +136,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
         out.close();
     }
 
-    // ── Private ───────────────────────────────────────────────────────────────
+    // -------------------------------------------------------------------------
 
     private void ensureOpen() throws IOException {
         if (closed) throw new IOException("Stream closed");
@@ -147,7 +158,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
     }
 
     private void flushBlock() throws IOException {
-        int comp    = LZ4.compress(inputBuf, 0, inputPos, compBuf, 0, maxChain);
+        int comp    = compressor.compress(inputBuf, 0, inputPos, compBuf, 0, compBuf.length);
         boolean raw = comp >= inputPos;
         int payload = raw ? inputPos : comp;
         writeLE32(raw ? (inputPos | 0x80000000) : comp);

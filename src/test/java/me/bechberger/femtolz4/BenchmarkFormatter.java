@@ -164,7 +164,7 @@ public final class BenchmarkFormatter {
     static String corpusLabel(CorpusKey key) {
         return switch (key.impl()) {
             case "dispatch" -> key.chain() == 1 ? "femto-fast" : "femto-hc";
-            case "yawkat-fast", "yawkat-hc" -> key.impl();
+            case "femto-java-fast", "femto-java", "yawkat-fast", "yawkat-hc" -> key.impl();
             default -> key.impl() + "-" + key.chain();
         };
     }

@@ -12,20 +12,6 @@
 #  include <immintrin.h>
 #endif
 
-/*
- * LZ4 frame format  https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md
- *
- * Header:  [magic 4B][FLG 1B][BD 1B][HC 1B]
- * Blocks:  [size 4B LE][data]   (size high bit = 1 → stored uncompressed)
- * Footer:  [0x00000000 4B]
- *
- * FLG 0x60 — version=01, block_independent=1, no checksums
- * BD  0x50 — block_maxsize=5 (256 KB)
- * HC       — (xxhash32(FLG ‖ BD) >> 8) & 0xFF
- */
-
-/* Left-rotate a 32-bit value.  Compilers emit a single ROL instruction. */
-
 #define PADDING_LITERALS 5
 #define WINDOW_MASK      (WINDOW_SIZE - 1)
 #define MIN_MATCH        4
@@ -34,8 +20,6 @@
 
 #define MIN(a, b)  ((a) < (b) ? (a) : (b))
 #define MAX(a, b)  ((a) > (b) ? (a) : (b))
-
-/* ── Primitives ─────────────────────────────────────────────────────────── */
 
 #define FORCE_INLINE static inline __attribute__((always_inline))
 #define HOT          __attribute__((hot))
@@ -238,8 +222,6 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t *src,
     return best_len;
 }
 
-/* ── Public API ─────────────────────────────────────────────────────────── */
-
 /*
  * Chain=1 fast-path using a uint64_t[LZ4_HASH_SIZE_FAST] table.
  * Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position (int32).
@@ -275,9 +257,6 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
     int skip_ctr   = 2 << 6;
 
     while (pos < loop_end) {
-        /* Adaptive skip: once we've seen 128 consecutive miss-bytes without a
-           match, jump forward by an increasing step (up to ~17 bytes), only
-           landing on the new position without inserting the skipped slots. */
         if (__builtin_expect(miss_bytes >= 128, 0)) {
             int step = (skip_ctr >> 6) + 1;
             if (skip_ctr < (17 << 6)) skip_ctr++;
@@ -286,11 +265,8 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             if (__builtin_expect(pos >= loop_end, 0)) break;
             memcpy(&pos4, src + pos, 4);
             h = lz4__hash4v(pos4);
-            /* fall through: still probe the landing position */
         }
 
-        /* Step A: look up htab for pos, then speculatively start pos+1 lookup
-           so its htab cache line has time to arrive before we need it. */
         uint64_t slot = htab[h];
         htab[h]       = ((uint64_t)pos4 << 32) | (uint32_t)pos;
 
@@ -333,11 +309,8 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
             }
         }
 
-        /* Step B: miss at pos — advance to pos+1.  htab[h1] prefetch already
-           issued above, so the cache line may already be in L1/L2. */
         pos++;
         if (__builtin_expect(pos >= loop_end, 0)) {
-            /* Re-sync state for the exit path. */
             memcpy(&pos4, src + pos, 4);
             h = lz4__hash4v(pos4);
             break;
@@ -345,7 +318,6 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         pos4 = pos4_1;
         h    = h1;
 
-        /* Step B: evaluate pos (the old pos+1). */
         uint64_t slot1 = htab[h];
         htab[h]        = ((uint64_t)pos4 << 32) | (uint32_t)pos;
 
@@ -390,7 +362,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
         }
         pos = src_len;
     }
-    } /* end of 4-byte read block */
+    }
 
 emit_tail:
     if (lit_start != src_len)
@@ -409,7 +381,6 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
     int miss_bytes = 0;
     int skip_ctr   = 2 << 6;
 
-    /* ── chain>1: hash chain, lazy matching, adaptive skip ── */
     while (pos < src_len) {
         /* Adaptive skip: in incompressible runs, jump forward without inserting
            skipped positions — mirrors the Java compressJavaImpl skip logic. */
@@ -484,11 +455,11 @@ static int lz4__compress_dispatch(lz4_stream_t *s,
     return lz4__compress_block_chain(s, src, dst, src_len, max_chain);
 }
 
+/* General block encoder: chain=1 defers to lz4_compress_fast(), chain>1 uses
+ * the hash-chain + lazy-matching path below. */
 #if defined(__x86_64__) || defined(_M_X64)
 __attribute__((target("avx2")))
 #endif
-/* General block encoder: chain=1 defers to lz4_compress_fast(), chain>1 uses
- * the hash-chain + lazy-matching path below. */
 HOT int lz4_compress_block(lz4_stream_t *s,
                        const uint8_t *src, uint8_t *dst,
                        int src_len, int max_chain)

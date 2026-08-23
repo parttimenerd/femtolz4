@@ -86,6 +86,12 @@ public final class CorpusBench {
                         (double) src.length / compressedLength, compressedLength);
             }
 
+            // ── femto-java bypass rows (always, independent of IMPL/LEVELS) ──
+            if (!IMPL.equals("java")) {
+                emitFemtoJava(src, name, 1,   "femto-java-fast");
+                emitFemtoJava(src, name, 256, "femto-java");
+            }
+
             // ── yawkat comparison rows ────────────────────────────────────────
             if (YAWKAT != null) {
                 emitYawkat(src, name, YAWKAT_FAST, YAWKAT_DEC, "yawkat-fast", 1);
@@ -94,6 +100,24 @@ public final class CorpusBench {
         }
 
         System.out.println("SINK," + sink);
+    }
+
+    private static void emitFemtoJava(byte[] src, String name, int maxChain, String label) {
+        byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
+        int compLen = LZ4Java.compressJava(src, 0, src.length, dst, 0, maxChain);
+        byte[] compressed = Arrays.copyOf(dst, compLen);
+        byte[] restored = new byte[src.length];
+
+        Timing ct = benchmark(() -> LZ4Java.compressJava(src, 0, src.length, dst, 0, maxChain), src.length);
+        emit("compress", name, src.length, maxChain, label, ct,
+                (double) src.length / compLen, compLen);
+
+        Timing dt = benchmark(() -> {
+            LZ4Java.decompressJavaWithMatchLowerBound(compressed, 0, compLen, restored, 0, src.length, 0);
+            return src.length;
+        }, src.length);
+        emit("decompress", name, src.length, maxChain, label, dt,
+                (double) src.length / compLen, compLen);
     }
 
     private static void emitYawkat(byte[] src, String name,
