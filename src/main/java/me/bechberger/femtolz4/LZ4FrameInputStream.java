@@ -79,8 +79,6 @@ public final class LZ4FrameInputStream extends InputStream {
     @Override
     public void close() throws IOException { in.close(); }
 
-    // ── Private ───────────────────────────────────────────────────────────────
-
     /** Ensure blockBuf has unread bytes. Returns false on EOF. */
     private boolean refill() throws IOException {
         if (eof) return false;

@@ -123,7 +123,7 @@ public final class LZ4 {
     public static int compress(byte[] src, int srcOff, int srcLen,
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
-        if (NativeLZ4.AVAILABLE && !IS_AARCH64 && maxChain != 0) {
+        if (NativeLZ4.AVAILABLE && !IS_AARCH64 && maxChain > 0) {
             int repeatedSamples = (srcLen >= X86_NATIVE_CHAIN_SAMPLE_MIN)
                 ? LZ4Java.countRepeatedSamples(src, srcOff, srcLen) : 0;
             boolean useJava = (maxChain == 1 && repeatedSamples >= 2 && repeatedSamples < 6)
@@ -134,6 +134,16 @@ public final class LZ4 {
             }
         }
         return LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+    }
+
+    /** Convenience: fast compress, returns a trimmed copy. */
+    public static byte[] compress(byte[] src) {
+        return compress(src, 1);
+    }
+
+    /** Convenience: high-ratio compress, returns a trimmed copy. */
+    public static byte[] compressHigh(byte[] src) {
+        return compress(src, HC_MAX_LEVEL);
     }
 
     /** Convenience: allocates (or reuses) an output buffer and returns a trimmed copy. */

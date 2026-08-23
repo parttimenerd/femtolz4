@@ -66,13 +66,6 @@ FORCE_INLINE void lz4__emit_literals(uint8_t *dst, int *op,
     }
 }
 
-/* Write match-length overflow bytes (called when match_extra >= 15). */
-FORCE_INLINE void lz4__emit_match_overflow(uint8_t *dst, int *op, int match_extra)
-{
-    if (match_extra >= 15)
-        lz4__write_length_overflow(dst, op, match_extra);
-}
-
 /* 4-byte multiply-shift hash for the chain path.
    The 5th-byte variant (previously used) adds a load with no measurable ratio benefit. */
 FORCE_INLINE uint32_t lz4__hash(const uint8_t *p)
@@ -298,7 +291,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
                 lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
                 { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
                 op += 2;
-                lz4__emit_match_overflow(dst, &op, match_extra);
+                if (match_extra >= 15) lz4__write_length_overflow(dst, &op, match_extra);
                 lit_start = pos + match_len;
                 pos = lit_start;
                 if (__builtin_expect(pos >= loop_end, 0)) break;
@@ -334,7 +327,7 @@ HOT int lz4_compress_fast(const uint8_t *src, uint8_t *dst,
                 lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra1);
                 { uint16_t off16 = (uint16_t)match_dist1; memcpy(dst + op, &off16, 2); }
                 op += 2;
-                lz4__emit_match_overflow(dst, &op, match_extra1);
+                if (match_extra1 >= 15) lz4__write_length_overflow(dst, &op, match_extra1);
                 lit_start = pos + match_len1;
                 pos = lit_start;
                 if (__builtin_expect(pos >= loop_end, 0)) break;
@@ -418,7 +411,7 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
             lz4__emit_literals(dst, &op, src, lit_start, pos - lit_start, match_extra);
             { uint16_t off16 = (uint16_t)match_dist; memcpy(dst + op, &off16, 2); }
             op += 2;
-            lz4__emit_match_overflow(dst, &op, match_extra);
+            if (match_extra >= 15) lz4__write_length_overflow(dst, &op, match_extra);
             lit_start = pos + match_len;
             int insert_end = lit_start < safe_end + 1 ? lit_start : safe_end + 1;
             /* If lazy_probed but lost, pos+1 was already inserted; skip it to
@@ -456,7 +449,7 @@ static int lz4__compress_dispatch(lz4_stream_t *s,
 }
 
 /* General block encoder: chain=1 defers to lz4_compress_fast(), chain>1 uses
- * the hash-chain + lazy-matching path below. */
+ * lz4__compress_block_chain() via lz4__compress_dispatch(). */
 #if defined(__x86_64__) || defined(_M_X64)
 __attribute__((target("avx2")))
 #endif
@@ -472,22 +465,4 @@ HOT int lz4_compress_block(lz4_stream_t *s,
     int result = lz4__compress_dispatch(s, src, dst, src_len, max_chain, htab);
     free(htab);
     return result;
-}
-
-int lz4_compress(const uint8_t *src, uint8_t *dst, int src_len, int max_chain)
-{
-    lz4_stream_t *s = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
-    if (!s) return 0;
-    uint64_t *htab = NULL;
-    if (max_chain == 1) {
-        htab = (uint64_t *)malloc(LZ4_HASH_SIZE_FAST * sizeof(uint64_t));
-        if (!htab) {
-            free(s);
-            return 0;
-        }
-    }
-    int n = lz4__compress_dispatch(s, src, dst, src_len, max_chain, htab);
-    free(htab);
-    free(s);
-    return n;
 }

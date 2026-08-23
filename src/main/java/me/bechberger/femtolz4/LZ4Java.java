@@ -6,12 +6,9 @@ import java.nio.ByteOrder;
 import java.util.Arrays;
 
 /**
- * Pure-Java LZ4 implementation and lz4-java-compatible factory methods.
+ * Pure-Java LZ4 block compressor and decompressor.
  *
  * <p>All compress/decompress logic lives here. {@link LZ4} is the public dispatch layer.
- *
- * <p><b>lz4-java migration:</b> replace {@code LZ4Factory.fastestInstance().fastCompressor()}
- * with {@code LZ4Java.fastCompressor()} (or {@code LZ4.compress()}).
  */
 public final class LZ4Java {
 
@@ -651,8 +648,7 @@ public final class LZ4Java {
                         int litLen1     = pos - litStart;
                         int matchExtra1 = len1 - MIN_MATCH;
                         int matchDist1  = pos - sv1;
-                        dst[op++] = (byte) (((litLen1 < 15 ? litLen1 : 15) << 4)
-                                           | (matchExtra1 < 15 ? matchExtra1 : 15));
+                        dst[op++] = token(litLen1, matchExtra1);
                         if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
                         op = copyLiterals(src, litStart, dst, op, litLen1);
                         dst[op++] = (byte) matchDist1;

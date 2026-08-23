@@ -31,7 +31,6 @@
    Negative position (high bit set) = empty.  Reset with 0x80 sentinel. */
 #define LZ4_HASH_BITS_FAST 12
 #define LZ4_HASH_SIZE_FAST (1 << LZ4_HASH_BITS_FAST)
-#define LZ4_HTAB_FAST_BYTES (LZ4_HASH_SIZE_FAST * sizeof(uint64_t))
 
 /*
  * Chain tail: uint64_t[WINDOW_SIZE] = 512 KiB.
@@ -58,10 +57,6 @@ typedef struct {
 int lz4_compress_block(lz4_stream_t *s,
                        const uint8_t *src, uint8_t *dst,
                        int src_len, int max_chain);
-
-/* Stateless single-block compress (allocates, inits, compresses, frees). */
-int lz4_compress(const uint8_t *src, uint8_t *dst,
-                 int src_len, int max_chain);
 
 /* chain=1 fast-path: uses a caller-provided uint64_t[LZ4_HASH_SIZE_FAST] table
  * (64 KiB), storing bits[63:32] = 4-byte src value and bits[31:0] = position.

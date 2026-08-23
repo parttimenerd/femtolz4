@@ -13,8 +13,6 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ── Thread-local compress state ─────────────────────────────────────────── */
-
 /* chain=1 fast path: uint64_t[LZ4_HASH_SIZE_FAST] table (64 KB).
    Each slot: bits[63:32] = 4-byte src value, bits[31:0] = position.
    Reset to sentinel 0x80 per call so stale entries never match across calls. */
@@ -39,8 +37,6 @@ static lz4_stream_t *get_stream(void)
         tl_stream = (lz4_stream_t *)malloc(sizeof(lz4_stream_t));
     return tl_stream;
 }
-
-/* ── Decompress ─────────────────────────────────────────────────────────── */
 
 #define D_MIN_MATCH 4
 
@@ -186,8 +182,6 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
     }
     return op - dst_off;
 }
-
-/* ── JNI entry points ───────────────────────────────────────────────────── */
 
 /*
  * JNI_OnLoad: verify that the CPU supports every SIMD/ISA feature compiled in.

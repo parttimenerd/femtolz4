@@ -53,7 +53,7 @@ final class NativeLZ4 {
                                byte[] dst, int dstOff, int dstLen,
                                int maxChain);
 
-    /** LZ4_decompress_safe — returns decompressed size, or negative on error. */
+    /** Returns decompressed size, or negative on error. */
     static native int decompress(byte[] src, int srcOff, int srcLen,
                                  byte[] dst, int dstOff, int dstLen);
 
