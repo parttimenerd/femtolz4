@@ -38,7 +38,6 @@ public final class LZ4 {
     /** Maximum HC compression level (equivalent to maxChain=256). */
     public static final int HC_MAX_LEVEL = 256;
 
-    // ── lz4-java-compatible inner interfaces ──────────────────────────────────
 
     /**
      * Compressor handle returned by the factory methods, compatible with the
@@ -64,7 +63,6 @@ public final class LZ4 {
                        byte[] dst, int dstOff, int originalLen);
     }
 
-    // ── lz4-java-compatible factory methods ───────────────────────────────────
 
     /** Returns a fast (chain=1) compressor. Equivalent to lz4-java's {@code fastCompressor()}. */
     public static Compressor compress() {
@@ -93,7 +91,7 @@ public final class LZ4 {
     public static Decompressor decompress() {
         return (src, srcOff, dst, dstOff, originalLen) -> {
             decompress(src, srcOff, src.length - srcOff, dst, dstOff, originalLen);
-            return src.length - srcOff;
+            return originalLen;
         };
     }
 
@@ -102,7 +100,6 @@ public final class LZ4 {
         return srcLen + 16 + (srcLen / 255) + 1;
     }
 
-    // ── Compress ──────────────────────────────────────────────────────────────
 
     /** True when the native library was loaded successfully. */
     public static boolean isNativeAvailable() { return NativeLZ4.AVAILABLE; }
@@ -174,7 +171,6 @@ public final class LZ4 {
         return LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
     }
 
-    // ── Decompress ────────────────────────────────────────────────────────────
 
     /**
      * Decompress an LZ4 block from {@code src[srcOff..srcOff+srcLen)} into

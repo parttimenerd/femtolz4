@@ -55,7 +55,7 @@ public final class LZ4Java {
     static int countRepeatedSamples(byte[] src, int srcOff, int srcLen) {
         int count = 0;
         int step  = Math.max(1, srcLen / 8);
-        int end   = srcOff + srcLen - 8;
+        int end   = srcOff + srcLen;
         for (int i = 0; i < 8; i++) {
             int pos = srcOff + i * step;
             if (pos + 8 > end) break;
@@ -268,7 +268,7 @@ public final class LZ4Java {
                 skipCtr   = 2 << 6;
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
-                dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
+                dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
                 dst[op++] = (byte)  matchDist;
@@ -294,7 +294,7 @@ public final class LZ4Java {
         }
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
+            dst[op++] = token(litLen, 0);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -418,7 +418,7 @@ public final class LZ4Java {
                 skipCtr   = 2 << 6;
                 int litLen     = pos - litStart;
                 int matchExtra = matchLen - MIN_MATCH;
-                dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
+                dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
                 dst[op++] = (byte)  matchDist;
@@ -442,7 +442,7 @@ public final class LZ4Java {
         }
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
+            dst[op++] = token(litLen, 0);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -501,8 +501,7 @@ public final class LZ4Java {
                     int litLen     = pos - litStart;
                     int matchExtra = matchLen - MIN_MATCH;
                     int matchDist  = pos - matchSv;
-                    dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
-                                       | (matchExtra < 15 ? matchExtra : 15));
+                    dst[op++] = token(litLen, matchExtra);
                     if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                     op = copyLiterals(src, litStart, dst, op, litLen);
                     dst[op++] = (byte) matchDist;
@@ -543,8 +542,7 @@ public final class LZ4Java {
                     int litLen     = pos - litStart;
                     int matchExtra = matchLen - MIN_MATCH;
                     int matchDist  = pos - matchSv;
-                    dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
-                                       | (matchExtra < 15 ? matchExtra : 15));
+                    dst[op++] = token(litLen, matchExtra);
                     if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                     op = copyLiterals(src, litStart, dst, op, litLen);
                     dst[op++] = (byte) matchDist;
@@ -576,7 +574,7 @@ public final class LZ4Java {
 
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
+            dst[op++] = token(litLen, 0);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -619,8 +617,7 @@ public final class LZ4Java {
                         int litLen     = pos - litStart;
                         int matchExtra = len - MIN_MATCH;
                         int matchDist  = pos - sv;
-                        dst[op++] = (byte) (((litLen < 15 ? litLen : 15) << 4)
-                                           | (matchExtra < 15 ? matchExtra : 15));
+                        dst[op++] = token(litLen, matchExtra);
                         if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                         op = copyLiterals(src, litStart, dst, op, litLen);
                         dst[op++] = (byte) matchDist;
@@ -687,7 +684,7 @@ public final class LZ4Java {
 
         int litLen = srcEnd - litStart;
         if (litLen > 0) {
-            dst[op++] = (byte) ((litLen < 15 ? litLen : 15) << 4);
+            dst[op++] = token(litLen, 0);
             if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
             op = copyLiterals(src, litStart, dst, op, litLen);
         }
@@ -876,6 +873,10 @@ public final class LZ4Java {
         for (; rem >= 255; rem -= 255) dst[op++] = (byte) 255;
         dst[op++] = (byte) rem;
         return op;
+    }
+
+    private static byte token(int litLen, int matchExtra) {
+        return (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
     }
 
     /**
