@@ -336,4 +336,4 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 
 ## License
 
-[MIT](LICENSE)
+MIT, Copyright 2026 Johannes Bechberger and contributors
