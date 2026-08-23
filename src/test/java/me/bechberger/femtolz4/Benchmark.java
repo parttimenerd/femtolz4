@@ -76,6 +76,14 @@ public class Benchmark {
         public byte[] decompress(byte[] c, int n) { return LZ4.decompressJava(c, n); }
     };
 
+    // ── femtolz4 pure-Java HC (chain=256) ────────────────────────────────────
+
+    static final Impl FEMTO_JAVA_HC = new Impl() {
+        public String name() { return "femto-java-hc"; }
+        public byte[] compress(byte[] s) { return LZ4.compressJava(s, LZ4.HC_MAX_LEVEL); }
+        public byte[] decompress(byte[] c, int n) { return LZ4.decompressJava(c, n); }
+    };
+
     // ── at.yawk lz4-java (net.jpountz package) – native ──────────────────────
 
     static LZ4Factory yawkNative;
@@ -109,7 +117,7 @@ public class Benchmark {
 
     public static void main(String[] args) throws Exception {
         List<Impl> impls = new ArrayList<>(Arrays.asList(
-                FEMTO_FAST, FEMTO, FEMTO_JAVA_FAST, FEMTO_JAVA));
+                FEMTO_FAST, FEMTO, FEMTO_JAVA_FAST, FEMTO_JAVA, FEMTO_JAVA_HC));
         Impl yn = yawkImpl(yawkNative, "yawkat-native");
         Impl yj = yawkImpl(yawkJava,   "yawkat-java");
         if (yn != null) impls.add(yn);

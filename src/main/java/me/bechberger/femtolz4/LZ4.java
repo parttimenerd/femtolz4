@@ -95,6 +95,37 @@ public final class LZ4 {
         };
     }
 
+    /** Returns a fast (chain=1) compressor that always uses the pure-Java path. */
+    public static Compressor compressJava() {
+        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
+            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, 1);
+    }
+
+    /** Returns a high-compression (chain=256) compressor that always uses the pure-Java path. */
+    public static Compressor compressHighJava() {
+        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
+            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, HC_MAX_LEVEL);
+    }
+
+    /**
+     * Returns a high-compression compressor at the given level that always uses the pure-Java path.
+     *
+     * @param level chain depth from {@value #HC_MIN_LEVEL} to {@value #HC_MAX_LEVEL}
+     */
+    public static Compressor compressHighJava(int level) {
+        int maxChain = Math.max(HC_MIN_LEVEL, Math.min(HC_MAX_LEVEL, level));
+        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
+            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+    }
+
+    /** Returns a decompressor that always uses the pure-Java path. */
+    public static Decompressor decompressJava() {
+        return (src, srcOff, dst, dstOff, originalLen) -> {
+            LZ4Java.decompressJavaImpl(src, srcOff, src.length - srcOff, dst, dstOff, originalLen, dstOff);
+            return originalLen;
+        };
+    }
+
     /** Worst-case output size for {@code srcLen} uncompressed bytes. */
     public static int maxCompressedLength(int srcLen) {
         return srcLen + 16 + (srcLen / 255) + 1;

@@ -36,6 +36,14 @@ public final class LZ4Java {
     private static final ThreadLocal<long[]> TL_FAST2_HEAD = ThreadLocal.withInitial(() -> {
         long[] t = new long[HASH_SIZE_FAST * 2]; Arrays.fill(t, FAST_SENTINEL); return t;
     });
+    /*
+     * Virtual-position bases for TL_FAST_HEAD and TL_FAST2_HEAD.
+     * Incremented by WINDOW_SIZE + srcLen each call so positions from prior blocks are
+     * always outside the current window — no Arrays.fill needed between calls.
+     * Stored as long[1]; reset to WINDOW_SIZE (+ re-fill table) on 32-bit overflow.
+     */
+    private static final ThreadLocal<long[]> TL_FAST_BASE  = ThreadLocal.withInitial(() -> new long[]{WINDOW_SIZE});
+    private static final ThreadLocal<long[]> TL_FAST2_BASE = ThreadLocal.withInitial(() -> new long[]{WINDOW_SIZE});
     /* Chain tables: head[] filled NIL before each block; tail[] only read from valid heads. */
     private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
     private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
@@ -450,8 +458,15 @@ public final class LZ4Java {
     private static int compressFast2Way(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head   = TL_FAST2_HEAD.get();
-        Arrays.fill(head, FAST_SENTINEL);
+        long[] head    = TL_FAST2_HEAD.get();
+        long[] baseArr = TL_FAST2_BASE.get();
+        int    base    = (int) baseArr[0];
+        long nextBase  = (long) base + WINDOW_SIZE + srcLen;
+        if (nextBase > Integer.MAX_VALUE - WINDOW_SIZE - 4 * 1024 * 1024) {
+            nextBase = WINDOW_SIZE;
+            Arrays.fill(head, FAST_SENTINEL);
+        }
+        baseArr[0] = nextBase;
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -461,6 +476,8 @@ public final class LZ4Java {
         int safeEnd2  = safeEnd - 1;
         int missBytes = 0;
         int skipCtr   = 2 << 6;
+
+        int posBase = base - srcOff;
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
@@ -472,19 +489,19 @@ public final class LZ4Java {
 
                 long s0 = head[bi], s1 = head[bi + 1];
                 head[bi + 1] = s0;
-                head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+                head[bi]     = ((long) v4 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
 
                 /* Speculatively compute pos+1 hash */
                 int v4_1 = (int) INT_LE.get(src, pos + 1);
                 int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-                int sv = (int) s0;
+                int sv = (int) s0 - posBase;
                 int matchSv = -1, matchLen = 0;
                 if (sv > pos - WINDOW_SIZE & (int)(s0 >>> 32) == v4) {
                     int len = extendMatch(src, sv, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = sv; matchLen = len; }
                 }
-                int sv1 = (int) s1;
+                int sv1 = (int) s1 - posBase;
                 if (sv1 != sv && sv1 > pos - WINDOW_SIZE & (int)(s1 >>> 32) == v4) {
                     if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, sv1, pos, safeEnd - pos);
@@ -515,17 +532,17 @@ public final class LZ4Java {
                 int bi1 = h1 << 1;
                 long ss0 = head[bi1], ss1 = head[bi1 + 1];
                 head[bi1 + 1] = ss0;
-                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
+                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1 + posBase) & 0xFFFFFFFFL);
                 pos++;
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
-                int svA = (int) ss0;
+                int svA = (int) ss0 - posBase;
                 matchSv = -1; matchLen = 0;
                 if (svA > pos - WINDOW_SIZE & (int)(ss0 >>> 32) == v4_1) {
                     int len = extendMatch(src, svA, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = svA; matchLen = len; }
                 }
-                int svB = (int) ss1;
+                int svB = (int) ss1 - posBase;
                 if (svB != svA && svB > pos - WINDOW_SIZE & (int)(ss1 >>> 32) == v4_1) {
                     if (matchLen == 0 || src[svB + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, svB, pos, safeEnd - pos);
@@ -582,8 +599,17 @@ public final class LZ4Java {
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head = TL_FAST_HEAD.get();
-        Arrays.fill(head, FAST_SENTINEL);
+        long[] head    = TL_FAST_HEAD.get();
+        long[] baseArr = TL_FAST_BASE.get();
+        int    base    = (int) baseArr[0];
+        /* Advance virtual base for next call so its positions fall outside the current window. */
+        long nextBase = (long) base + WINDOW_SIZE + srcLen;
+        if (nextBase > Integer.MAX_VALUE - WINDOW_SIZE - 4 * 1024 * 1024) {
+            /* 32-bit overflow imminent: reset base and re-initialise table. */
+            nextBase = WINDOW_SIZE;
+            Arrays.fill(head, FAST_SENTINEL);
+        }
+        baseArr[0] = nextBase;
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -595,15 +621,18 @@ public final class LZ4Java {
         int missBytes = 0;
         int skipCtr   = 2 << 6;
 
+        /* Offset from srcOff into virtual position space. */
+        int posBase = base - srcOff;
+
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
             int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
             while (pos < safeEnd2) {
                 long slot = head[h];
-                head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+                head[h] = ((long) v4 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
 
-                int sv = (int) slot;
+                int sv = (int) slot - posBase;  // back to src coordinates
                 if (sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
                     int maxMatch = safeEnd - pos;
                     int len = extendMatch(src, sv, pos, maxMatch);
@@ -635,9 +664,9 @@ public final class LZ4Java {
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
                 long slot1 = head[h1];
-                head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
+                head[h1] = ((long) v4_1 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
 
-                int sv1 = (int) slot1;
+                int sv1 = (int) slot1 - posBase;
                 if (sv1 > pos - WINDOW_SIZE & (int)(slot1 >>> 32) == v4_1) {
                     int maxMatch1 = safeEnd - pos;
                     int len1 = extendMatch(src, sv1, pos, maxMatch1);
