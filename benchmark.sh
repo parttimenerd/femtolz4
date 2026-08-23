@@ -14,6 +14,7 @@ cd "$SCRIPT_DIR"
 
 echo "Building..."
 mvn -q clean package -DskipTests
+mvn -q package -DskipTests -Djava.only=true
 mvn -q test-compile
 
 JAR="$SCRIPT_DIR/target/femtolz4-0.1.0.jar"

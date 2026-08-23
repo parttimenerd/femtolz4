@@ -120,6 +120,32 @@
     </build>
 
     <profiles>
+        <!-- Activated by -Djava.only=true: pure-Java JAR, no bundled native libs.
+             Output: target/femtolz4-java-0.1.0.jar -->
+        <profile>
+            <id>java-only</id>
+            <activation>
+                <property><name>java.only</name><value>true</value></property>
+            </activation>
+            <properties>
+                <native.skip>true</native.skip>
+            </properties>
+            <build>
+                <finalName>femtolz4-java-${project.version}</finalName>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-jar-plugin</artifactId>
+                        <version>3.3.0</version>
+                        <configuration>
+                            <excludes>
+                                <exclude>native/**</exclude>
+                            </excludes>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
         <!-- Activated by -Dtest.full=true: runs the full test suite, including
              tests tagged "slow" (exhaustive truncation sweeps, 100MB fuzz, etc). -->
         <profile>
