@@ -19,33 +19,138 @@ The goal is a small, auditable codebase with competitive performance.
 </dependency>
 ```
 
-Requirements: JDK 17+.
+Requirements: JDK 17+, no other runtime dependencies.
 
-## Quick Start
+## Quick start
 
-For most applications, use frame streams:
+Compress and decompress files using the frame stream API:
 
 ```java
+import me.bechberger.femtolz4.LZ4FrameOutputStream;
+import me.bechberger.femtolz4.LZ4FrameInputStream;
+
+// Compress
 try (var out = new LZ4FrameOutputStream(Files.newOutputStream(path))) {
-    out.write(data);
+    out.write(data);          // or: inputStream.transferTo(out)
 }
 
+// Decompress
 try (var in = new LZ4FrameInputStream(Files.newInputStream(path))) {
     byte[] restored = in.readAllBytes();
 }
 ```
 
-Use the low-level block API only when you need precise control and already know
-the uncompressed size:
+The output is compatible with the `lz4` CLI tool and any spec-compliant LZ4 decoder.
+
+## API
+
+### Frame streams
+
+`LZ4FrameOutputStream` and `LZ4FrameInputStream` are drop-in replacements for
+`GZIPOutputStream` / `GZIPInputStream`. They are the right choice for almost
+all use cases — use them unless you have a specific reason to manage raw blocks.
+
+**Constructors:**
 
 ```java
-byte[] compressed = LZ4.compress(data);
-byte[] original = LZ4.decompress(compressed, originalSize);
+new LZ4FrameOutputStream(out)                      // default: 1 MiB blocks, level 1
+new LZ4FrameOutputStream(out, level)               // level 1–9, default block size
+new LZ4FrameOutputStream(out, blockSize, level)    // explicit block size and level
+new LZ4FrameOutputStream(out, LZ4.compress())      // pass a Compressor directly
+new LZ4FrameOutputStream(out, LZ4.compressHigh())
 ```
+
+**Compression levels** (1–9):
+
+| Level | Speed | Ratio |
+|-------|-------|-------|
+| 1 (default) | fastest | good |
+| 5 | balanced | better |
+| 9 | slower | best |
+
+**Block sizes:** 64 KiB, 256 KiB, 1 MiB (default), 4 MiB.
+Smaller blocks reduce peak memory use; larger blocks improve ratio on
+compressible data. The default 1 MiB works well for most cases.
+
+### Block API
+
+Use this only when you manage raw LZ4 blocks directly — for example, embedding
+compressed data in a custom binary format where you store the original size yourself.
+
+```java
+// Compress a byte array
+byte[] compressed = LZ4.compress(data);          // fastest
+byte[] compressed = LZ4.compressHigh(data);      // best ratio
+
+// Decompress — you must know the original (uncompressed) size
+byte[] original = LZ4.decompress(compressed, originalSize);
+
+// Low-level: compress into an existing buffer
+int compressedLen = LZ4.compress(src, srcOff, srcLen, dst, dstOff, maxChain);
+
+// Worst-case output size (for pre-allocating dst)
+int maxLen = LZ4.maxCompressedLength(srcLen);
+```
+
+`LZ4.compressHigh(int level)` accepts a level from 1 to 256 (search chain depth).
+The zero-argument form uses the maximum (256). Higher values improve ratio at the
+cost of compression speed; decompression speed is unaffected.
+
+### Compressor and Decompressor handles
+
+`LZ4.compress()` and `LZ4.compressHigh()` return a `LZ4.Compressor` handle that
+can be passed to `LZ4FrameOutputStream` or called directly:
+
+```java
+LZ4.Compressor c = LZ4.compressHigh(5);
+
+// Use with frame stream
+try (var out = new LZ4FrameOutputStream(sink, c)) { ... }
+
+// Use directly (dst must be at least LZ4.maxCompressedLength(srcLen) bytes)
+int n = c.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
+```
+
+Similarly, `LZ4.decompress()` returns a `LZ4.Decompressor`:
+
+```java
+LZ4.Decompressor d = LZ4.decompress();
+int written = d.decompress(src, srcOff, dst, dstOff, originalLen);
+```
+
+### xxHash-32
+
+```java
+int hash = XXHash32.hash(data, 0, data.length);   // seed = 0
+```
+
+Used internally for frame checksums; also available as a standalone utility.
+
+## Compatibility and limits
+
+- Output is standard LZ4 frame format, readable by the `lz4` CLI and all
+  spec-compliant decoders.
+- `LZ4FrameInputStream` handles concatenated frames, skippable frames,
+  block-independent and block-dependent frames.
+- `LZ4FrameOutputStream` writes block-independent frames only.
+- Header checksum, block checksum, and content checksum are verified when present.
+- Malformed or truncated input throws `LZ4Exception` — it never crashes.
+- Native acceleration is bundled for `darwin/aarch64` and `linux/amd64`;
+  all other platforms fall back to pure Java automatically.
+
+Frame feature support:
+
+| Feature | Decode | Encode |
+| --- | :---: | :---: |
+| Independent blocks | yes | yes |
+| Dependent blocks | yes | no |
+| Block checksum | yes | no |
+| Content checksum | yes | no |
+| Skippable frames | yes | no |
 
 ## Relationship to lz4-java
 
-[lz4-java](https://github.com/lz4/lz4-java) (and its excellent fork
+[lz4-java](https://github.com/lz4/lz4-java) (and its fork
 [yawkat/lz4-java](https://github.com/yawkat/lz4-java)) inspired femtolz4.
 lz4-java covers more platforms and has a longer track record. femtolz4 trades
 breadth for a much smaller, simpler codebase.
@@ -58,95 +163,9 @@ breadth for a much smaller, simpler codebase.
 | Platforms with native acceleration | 7 | 2 (darwin/aarch64, linux/amd64) |
 | Dependencies at runtime | none | none |
 
-## API
-
-There are two layers:
-
-- `LZ4FrameInputStream` / `LZ4FrameOutputStream` are the easy, file-oriented API.
-  They read and write standard LZ4 frames and are what most callers should use.
-- `LZ4` exposes raw block compression and decompression. It is lower-level and
-  requires the caller to manage details such as the uncompressed size.
-
-### Frame API
-
-```java
-// Standard LZ4 frame streams (compatible with the lz4 CLI)
-try (var out = new LZ4FrameOutputStream(Files.newOutputStream(path))) {
-    out.write(data);
-}
-
-try (var in = new LZ4FrameInputStream(Files.newInputStream(path))) {
-    byte[] data = in.readAllBytes();
-}
-```
-
-`LZ4FrameOutputStream` exposes a public compression `level` from `1` to `9`:
-
-- `1` = fastest compression
-- `9` = best compression ratio (typically slower compression)
-- higher levels spend more CPU time searching for longer matches
-
-You can use the default settings:
-
-```java
-new LZ4FrameOutputStream(out)
-```
-
-or choose a level and optionally a block size:
-
-```java
-new LZ4FrameOutputStream(out, 5);              // default 1 MiB blocks
-new LZ4FrameOutputStream(out, 256 * 1024, 5); // explicit block size + level
-```
-
-Alternatively, pass a `LZ4.Compressor` directly:
-
-```java
-new LZ4FrameOutputStream(out, LZ4.compress());        // fastest
-new LZ4FrameOutputStream(out, LZ4.compressHigh());    // best ratio
-```
-
-### Block API
-
-```java
-// Fastest compression
-byte[] compressed = LZ4.compress(data);
-
-// Better ratio (higher search effort)
-byte[] compressed = LZ4.compressHigh(data);
-
-// Decompress (you must know the original size)
-byte[] original = LZ4.decompress(compressed, originalSize);
-
-// Standalone xxHash-32 (seed=0), no dependencies
-int hash = XXHash32.hash(data, 0, data.length);
-```
-
-`LZ4.compressHigh(int level)` accepts a level from 1 to 256 (search chain
-depth). The zero-argument form uses the maximum. Higher values improve ratio
-at the cost of compression speed; decompression speed is unaffected.
-
-## Compatibility and Limits
-
-- Frame input supports standard LZ4 frames, concatenated frames, and skippable
-  frames.
-- Header checksum, block checksum, and content checksum are verified when present.
-- Malformed input is rejected with `LZ4Exception`.
-- Block-dependent frames are supported for decoding by `LZ4FrameInputStream`.
-- `LZ4FrameOutputStream` encodes block-independent frames only; block-dependent
-  encoding is intentionally not implemented to keep the encoder simple.
-- Native acceleration is bundled for `darwin/aarch64` and `linux/amd64`; other
-  platforms use the pure-Java path automatically.
-
-Frame feature support summary:
-
-| Feature | Decode | Encode |
-| --- | :---: | :---: |
-| Independent blocks | yes | yes |
-| Dependent blocks | yes | no |
-| Block checksum | yes | no |
-| Content checksum | yes | no |
-| Skippable frames | yes | no |
+The `LZ4.Compressor` and `LZ4.Decompressor` interfaces are intentionally
+compatible with lz4-java's `LZ4Compressor` and `LZ4FastDecompressor`, so
+migration is mostly a find-and-replace of factory calls.
 
 ## CLI
 
@@ -155,9 +174,7 @@ java -jar femtolz4.jar compress   <input>     <output.lz4> [level]
 java -jar femtolz4.jar decompress <input.lz4> <output>
 ```
 
-`level` is from `1` (fastest) to `9` (best ratio). The default is `1`.
-
-On invalid arguments, the CLI prints an error message and exits with status `1`.
+`level` is from `1` (fastest) to `9` (best ratio), default `1`.
 
 ## Building
 
@@ -171,24 +188,17 @@ The JAR lands at `target/femtolz4-0.1.0.jar`.
 
 ### Native libraries
 
-Pre-built native libraries for darwin/aarch64 and linux/amd64 are bundled in the JAR under
-`native/<platform>/`.
-
-To rebuild native libraries from source, use the helper script:
+Pre-built native libraries for darwin/aarch64 and linux/amd64 are bundled in the
+JAR under `native/<platform>/`. To rebuild from source:
 
 ```bash
-python3 build_native.py
-```
-
-Useful variants:
-
-```bash
-python3 build_native.py --list
-python3 build_native.py darwin-aarch64
+python3 build_native.py                  # all platforms
+python3 build_native.py darwin-aarch64   # one platform
 python3 build_native.py linux-amd64
+python3 build_native.py --list           # show available targets
 ```
 
-To skip native builds and force the pure-Java path during Maven builds/tests:
+To skip native builds and force the pure-Java path:
 
 ```bash
 mvn package -Dnative.skip=true
@@ -208,17 +218,11 @@ and `IOException`. It covers:
 
 - every possible truncation of a valid compressed block and frame stream,
 - random-garbage fuzzing (via [jqwik](https://jqwik.net)) fed directly as "compressed" input,
-- specifically crafted adversarial input: overflowing literal/match length fields,
+- crafted adversarial input: overflowing literal/match length fields,
   huge or zero match offsets, and oversized frame block-size fields.
 
 Slow tests (large-payload fuzzing, exhaustive truncation at higher chain depths) are
 tagged `"slow"` and excluded by default; use `-Dtest.full=true` to include them.
-
-## Choosing Parameters
-
-- Start with frame API defaults.
-- Increase `level` only if smaller output matters more than compression speed.
-- Keep default block size unless you have memory-pressure reasons to lower it.
 
 ## Benchmark
 
@@ -336,4 +340,4 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 
 ## License
 
-MIT, Copyright 2026 SAP SE and contributors
+MIT, Copyright 2026 Johannes Bechberger and contributors
