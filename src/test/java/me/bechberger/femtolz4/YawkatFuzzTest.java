@@ -131,18 +131,20 @@ class YawkatFuzzTest {
 
     // ── Property-based fuzz tests ─────────────────────────────────────────────
 
-    @Property(tries = 3000)
+    @Property
+    @Tag("deep-fuzz")
     void randomBytesAllModes(@ForAll @Size(max = 16384) byte[] data) {
         assertAllModes(data, "random");
     }
 
     @Property(tries = 500)
-    @Tag("slow")
+    @Tag("slow-fuzz")
     void randomBytesAllModesLarge(@ForAll @Size(min = 65536, max = 256 * 1024) byte[] data) {
         assertAllModes(data, "random-large");
     }
 
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void randomBytesYawkatOracle(@ForAll @Size(min = 16, max = 65536) byte[] data) {
         assertYawkatToFemto(data, "random");
         // Also: femto all-modes → yawkat
@@ -161,7 +163,8 @@ class YawkatFuzzTest {
      * would end within the last 12 bytes, forcing the compressor to emit literals.
      * The last match must start at position ≤ srcLen-12.
      */
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void mflimitBoundaryStress(@ForAll @IntRange(min = 12, max = 200) int len,
                                @ForAll @IntRange(min = 1, max = 4) int patLen) {
         // Pattern repeated enough to create matches, with varying tail length
@@ -176,7 +179,8 @@ class YawkatFuzzTest {
      * Exact MFLIMIT boundary: src length that triggers different code paths
      * at exactly srcLen ∈ {8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 24}.
      */
-    @Property(tries = 200)
+    @Property
+
     void exactMflimitLengths(@ForAll @IntRange(min = 1, max = 30) int len) {
         // Both repetitive (compressible) and random (incompressible) content
         byte[] repSrc = new byte[len];
@@ -193,7 +197,8 @@ class YawkatFuzzTest {
      * exercises the boundary where a match may or may not be emitted.
      * Build: [32-byte repeat] + [tail of `tailLen` random bytes]
      */
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void matchFollowedByShortTail(@ForAll @IntRange(min = 0, max = 15) int tailLen,
                                   @ForAll @IntRange(min = 1, max = 4) int patLen) {
         byte[] pat = new byte[patLen];
@@ -211,14 +216,16 @@ class YawkatFuzzTest {
 
     // ── Highly compressible data ─────────────────────────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void singleRepeatedByte(@ForAll byte value, @ForAll @IntRange(min = 1, max = 65536) int len) {
         byte[] src = new byte[len];
         Arrays.fill(src, value);
         assertAllModes(src, "single-byte value=0x" + Integer.toHexString(value & 0xFF) + " len=" + len);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void shortPatternRepeated(@ForAll @Size(min = 1, max = 8) byte[] pattern,
                               @ForAll @IntRange(min = 1, max = 65536) int totalLen) {
         byte[] src = new byte[totalLen];
@@ -226,14 +233,16 @@ class YawkatFuzzTest {
         assertAllModes(src, "pattern len=" + pattern.length + " total=" + totalLen);
     }
 
-    @Property(tries = 300)
+    @Property
+
     void allZerosVariousLengths(@ForAll @IntRange(min = 1, max = 131072) int len) {
         assertAllModes(new byte[len], "all-zeros len=" + len);
     }
 
     // ── Near-incompressible (stress adaptive skip) ────────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void nearIncompressible(@ForAll @Size(min = 1024, max = 65536) byte[] data) {
         // Make data high-entropy by XORing with a random key to defeat any compression
         byte[] src = data.clone();
@@ -244,7 +253,8 @@ class YawkatFuzzTest {
 
     // ── Non-zero offsets ─────────────────────────────────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void nonZeroSrcOff(@ForAll @Size(min = 16, max = 32768) byte[] data,
                        @ForAll @IntRange(min = 1, max = 256) int srcOff) {
         byte[] padded = new byte[srcOff + data.length];
@@ -267,7 +277,8 @@ class YawkatFuzzTest {
         }
     }
 
-    @Property(tries = 500)
+    @Property
+
     void nonZeroDstOff(@ForAll @Size(min = 16, max = 32768) byte[] data,
                        @ForAll @IntRange(min = 1, max = 256) int dstOff) {
         byte[] comp = LZ4.compress(data, 1);
@@ -290,21 +301,24 @@ class YawkatFuzzTest {
 
     // ── Structured data ──────────────────────────────────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void sortedAscending(@ForAll @IntRange(min = 1, max = 65536) int len) {
         byte[] src = new byte[len];
         for (int i = 0; i < len; i++) src[i] = (byte)(i & 0xFF);
         assertAllModes(src, "sorted-ascending len=" + len);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void sortedDescending(@ForAll @IntRange(min = 1, max = 65536) int len) {
         byte[] src = new byte[len];
         for (int i = 0; i < len; i++) src[i] = (byte)((len - i) & 0xFF);
         assertAllModes(src, "sorted-descending len=" + len);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void sawtoothPattern(@ForAll @IntRange(min = 2, max = 256) int period,
                          @ForAll @IntRange(min = 16, max = 65536) int len) {
         byte[] src = new byte[len];
@@ -312,7 +326,8 @@ class YawkatFuzzTest {
         assertAllModes(src, "sawtooth period=" + period + " len=" + len);
     }
 
-    @Property(tries = 300)
+    @Property
+
     void binaryAlternating(@ForAll @IntRange(min = 1, max = 65536) int len) {
         byte[] src = new byte[len];
         for (int i = 0; i < len; i++) src[i] = (byte)(i & 1);
@@ -321,7 +336,8 @@ class YawkatFuzzTest {
 
     // ── WINDOW_SIZE boundary ─────────────────────────────────────────────────
 
-    @Property(tries = 100)
+    @Property
+
     void windowSizeBoundary(@ForAll @IntRange(min = 0, max = 512) int extra) {
         int len = LZ4.WINDOW_SIZE + extra;
         byte[] src = new byte[len];
@@ -336,7 +352,8 @@ class YawkatFuzzTest {
 
     // ── Long matches (overflow encoding chain) ────────────────────────────────
 
-    @Property(tries = 200)
+    @Property
+
     void longMatchOverflowEncoding(@ForAll @IntRange(min = 20, max = 5000) int runLen,
                                    @ForAll @IntRange(min = 1, max = 4) int patLen) {
         byte[] pat = new byte[patLen];
@@ -348,7 +365,8 @@ class YawkatFuzzTest {
 
     // ── Mix of compressible and incompressible regions ────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void mixedCompressibleIncompressible(@ForAll @IntRange(min = 1024, max = 32768) int len,
                                          @ForAll @IntRange(min = 1, max = 10) int seed) {
         byte[] src = new byte[len];
@@ -372,7 +390,8 @@ class YawkatFuzzTest {
 
     // ── Lengths near PADDING (5) and MFLIMIT (12) boundaries ─────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void nearPaddingAndMflimitBoundary(@ForAll @IntRange(min = 1, max = 30) int len) {
         byte[] src = new byte[len];
         new Random(len * 7L).nextBytes(src);
@@ -381,7 +400,8 @@ class YawkatFuzzTest {
 
     // ── All-0xFF ─────────────────────────────────────────────────────────────
 
-    @Property(tries = 200)
+    @Property
+
     void allFF(@ForAll @IntRange(min = 1, max = 65536) int len) {
         byte[] src = new byte[len];
         Arrays.fill(src, (byte) 0xFF);
@@ -398,13 +418,15 @@ class YawkatFuzzTest {
 
     // ── yawkat→femto for structured data ─────────────────────────────────────
 
-    @Property(tries = 300)
+    @Property
+
     void yawkatProducedOutputRoundTripAllFemtoModes(
             @ForAll @Size(min = 16, max = 65536) byte[] data) {
         assertYawkatToFemto(data, "yawkat→femto");
     }
 
-    @Property(tries = 200)
+    @Property
+
     void yawkatHCProducedOutputRoundTrip(@ForAll @Size(min = 16, max = 32768) byte[] data) {
         LZ4Compressor hc = YAWKAT_FACTORY.highCompressor();
         byte[] tmp = new byte[hc.maxCompressedLength(data.length)];
@@ -425,7 +447,8 @@ class YawkatFuzzTest {
      * This is the core invariant: if femto compresses it, any LZ4-spec-compliant
      * decompressor must be able to decode it.
      */
-    @Property(tries = 2000)
+    @Property
+    @Tag("deep-fuzz")
     void crossCompatibilityAllModes(@ForAll @Size(min = 16, max = 32768) byte[] data) {
         for (FemtoComp fc : ALL_COMPRESSORS) {
             byte[] compressed = fc.compress(data);
@@ -442,7 +465,8 @@ class YawkatFuzzTest {
 
     // ── Compression ratio is ≥ yawkat for highly compressible data ───────────
 
-    @Property(tries = 200)
+    @Property
+
     void hcRatioBetterThanFast(@ForAll @IntRange(min = 1024, max = 65536) int len,
                                @ForAll @IntRange(min = 1, max = 8) int patLen) {
         byte[] pat = new byte[patLen];
@@ -469,7 +493,8 @@ class YawkatFuzzTest {
      * Blocks where bytes cycle through exactly `range` distinct values.
      * Low range = high compressibility, high range = lower compressibility.
      */
-    @Property(tries = 300)
+    @Property
+
     void cyclingByteRange(@ForAll @IntRange(min = 1, max = 256) int range,
                           @ForAll @IntRange(min = 16, max = 65536) int len) {
         byte[] src = new byte[len];
@@ -483,7 +508,8 @@ class YawkatFuzzTest {
      * Compressible prefix followed by random suffix — stresses the tail
      * literal encoding path that must correctly handle the final sequence.
      */
-    @Property(tries = 500)
+    @Property
+
     void compressiblePrefixRandomSuffix(@ForAll @IntRange(min = 64, max = 32768) int bodyLen,
                                         @ForAll @IntRange(min = 1, max = 32) int tailLen) {
         int total = bodyLen + tailLen;
@@ -503,7 +529,8 @@ class YawkatFuzzTest {
      * Mix: 128 random bytes (triggers skip mode) then compressible bytes.
      * This stresses the miss_bytes/skip_ctr reset after a match is found.
      */
-    @Property(tries = 500)
+    @Property
+
     void skipModeResetOnMatch(@ForAll @IntRange(min = 1, max = 4) int patLen,
                               @ForAll @IntRange(min = 512, max = 16384) int totalLen) {
         byte[] src = new byte[totalLen];
@@ -523,7 +550,8 @@ class YawkatFuzzTest {
      * Place identical 8-byte markers at Fibonacci-spaced positions.
      * This creates irregular match distances that stress chain lookup.
      */
-    @Property(tries = 200)
+    @Property
+
     void fibonacciSpacedMatches(@ForAll @IntRange(min = 512, max = 32768) int len) {
         byte[] src = new byte[len];
         new Random(len).nextBytes(src);
@@ -540,7 +568,8 @@ class YawkatFuzzTest {
 
     // ── Alternating compressible/incompressible 16-byte blocks ───────────────
 
-    @Property(tries = 300)
+    @Property
+
     void alternating16ByteBlocks(@ForAll @IntRange(min = 64, max = 16384) int len) {
         byte[] src = new byte[len];
         Random rng = new Random(len * 41L);
@@ -558,7 +587,8 @@ class YawkatFuzzTest {
 
     // ── All-zeros then all-0xFF halves ────────────────────────────────────────
 
-    @Property(tries = 200)
+    @Property
+
     void zerosThenFF(@ForAll @IntRange(min = 16, max = 65536) int len) {
         byte[] src = new byte[len];
         Arrays.fill(src, len / 2, len, (byte) 0xFF);
@@ -571,7 +601,8 @@ class YawkatFuzzTest {
      * Manually craft a block with exactly 12 random trailing bytes after the
      * last possible match position, stressing the MFLIMIT boundary directly.
      */
-    @Property(tries = 300)
+    @Property
+
     void exactMflimitTrailingLiterals(@ForAll @IntRange(min = 32, max = 8192) int bodyLen,
                                       @ForAll @IntRange(min = 0, max = 11) int extraLiterals) {
         // body: repeated pattern to create matches
@@ -585,7 +616,8 @@ class YawkatFuzzTest {
 
     // ── Realistic-ish data: Java class file header pattern ───────────────────
 
-    @Property(tries = 200)
+    @Property
+
     void javaClassHeaderLike(@ForAll @IntRange(min = 100, max = 16384) int len) {
         byte[] src = new byte[len];
         // Simulate typical JFR/class file byte patterns
@@ -607,7 +639,8 @@ class YawkatFuzzTest {
      * Different compressors may produce different compressed bytes, but must
      * all decompress to the same original.  Cross-checks every pair.
      */
-    @Property(tries = 500)
+    @Property
+
     void allCompressorOutputEquivalent(@ForAll @Size(min = 1, max = 8192) byte[] data) {
         byte[][] allCompressed = new byte[ALL_COMPRESSORS.size()][];
         for (int i = 0; i < ALL_COMPRESSORS.size(); i++) {

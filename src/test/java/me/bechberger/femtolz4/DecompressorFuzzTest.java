@@ -116,7 +116,8 @@ class DecompressorFuzzTest {
      *  - both succeed and produce the same output.
      * They must NEVER disagree on correctness.
      */
-    @Property(tries = 5000)
+    @Property
+    @Tag("deep-fuzz")
     void javaAndNativeAlwaysAgree(@ForAll @Size(max = 2048) byte[] bytes,
                                   @ForAll @IntRange(min = 0, max = 4096) int dstLen) {
         if (!LZ4.isNativeAvailable()) return;
@@ -143,7 +144,8 @@ class DecompressorFuzzTest {
      * For yawkat-compressed data (definitely valid), femto-java and femto-native
      * must BOTH succeed and produce the same output.
      */
-    @Property(tries = 2000)
+    @Property
+    @Tag("deep-fuzz")
     void javaAndNativeAgreeOnValidInput(@ForAll @Size(max = 32768) byte[] src) {
         if (!LZ4.isNativeAvailable()) return;
         byte[] tmp = new byte[YAWKAT.fastCompressor().maxCompressedLength(src.length)];
@@ -159,7 +161,8 @@ class DecompressorFuzzTest {
 
     // ── B. Bit-flip corruption: valid block + single-byte mutation ─────────────
 
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void singleByteMutationNeverCrashes(@ForAll @Size(min = 1, max = 1024) byte[] src,
                                         @ForAll @IntRange(min = 0, max = 255) int replaceByte) {
         byte[] comp = LZ4.compress(src, 1);
@@ -171,7 +174,8 @@ class DecompressorFuzzTest {
         }
     }
 
-    @Property(tries = 500)
+    @Property
+
     void randomByteSubstitutionNeverCrashes(@ForAll @Size(min = 8, max = 2048) byte[] src,
                                             @ForAll @IntRange(min = 0, max = 20) int numMutations,
                                             @ForAll long seed) {
@@ -185,7 +189,8 @@ class DecompressorFuzzTest {
         assertSafeNative(mutated, src.length);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void truncationAtEveryPointNeverCrashes(@ForAll @Size(min = 4, max = 512) byte[] src) {
         byte[] comp = LZ4.compress(src, 1);
         for (int len = 0; len <= comp.length; len++) {
@@ -253,7 +258,8 @@ class DecompressorFuzzTest {
 
     // ── D. dstLen edge cases ──────────────────────────────────────────────────
 
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void exactDstLenAlwaysCorrect(@ForAll @Size(min = 4, max = 16384) byte[] src) {
         for (int chain : new int[]{1, 4}) {
             byte[] comp = LZ4.compress(src, chain);
@@ -267,7 +273,8 @@ class DecompressorFuzzTest {
      * Requesting dstLen one less than the actual uncompressed size must throw,
      * because the block contains more data than fits in the requested output buffer.
      */
-    @Property(tries = 500)
+    @Property
+
     void dstLenOneLessThanNeededThrows(@ForAll @Size(min = 2, max = 1024) byte[] src) {
         if (src.length == 0) return;
         byte[] comp = LZ4.compress(src, 1);
@@ -280,7 +287,8 @@ class DecompressorFuzzTest {
      * the decompressor returns the actual number of bytes written.
      * The returned count must equal the original source length.
      */
-    @Property(tries = 500)
+    @Property
+
     void dstLenLargerThanNeededReturnsActualCount(@ForAll @Size(min = 1, max = 1024) byte[] src) {
         byte[] comp = LZ4.compress(src, 1);
         // allocate a dst buffer of size srcLen+64, request srcLen+64 bytes
@@ -295,7 +303,8 @@ class DecompressorFuzzTest {
 
     // ── E. Large match length: multi-level overflow encoding ─────────────────
 
-    @Property(tries = 300)
+    @Property
+
     void largeMatchLengthRoundTrip(@ForAll @IntRange(min = 4, max = 8192) int matchLen,
                                    @ForAll @IntRange(min = 1, max = 8) int litLen) {
         byte[] src = new byte[litLen + matchLen];
@@ -313,7 +322,8 @@ class DecompressorFuzzTest {
 
     // ── F. srcOff / dstOff independence ──────────────────────────────────────
 
-    @Property(tries = 500)
+    @Property
+
     void srcOffIndependence(@ForAll @Size(min = 16, max = 8192) byte[] src,
                             @ForAll @IntRange(min = 0, max = 128) int srcOff) {
         byte[] comp = LZ4.compress(src, 2);
@@ -326,7 +336,8 @@ class DecompressorFuzzTest {
         assertArrayEquals(out1, dst, "srcOff=" + srcOff);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void dstOffIndependence(@ForAll @Size(min = 16, max = 8192) byte[] src,
                             @ForAll @IntRange(min = 0, max = 128) int dstOff) {
         byte[] comp = LZ4.compress(src, 2);
@@ -363,7 +374,8 @@ class DecompressorFuzzTest {
 
     // ── H. Consistency: java == native on all valid compressed inputs ─────────
 
-    @Property(tries = 2000)
+    @Property
+    @Tag("deep-fuzz")
     void javaEqualsNativeOnAllCompressors(@ForAll @Size(max = 16384) byte[] src) {
         if (!LZ4.isNativeAvailable()) return;
         for (int chain : new int[]{0, 1, 2, 4, 256}) {
@@ -407,7 +419,8 @@ class DecompressorFuzzTest {
      * Crafted block with a chain of N sequences (litLen=0 for inner ones).
      * Tests the decompressor's ability to handle zero-literal tokens in a sequence.
      */
-    @Property(tries = 300)
+    @Property
+
     void chainOfZeroLiteralSequences(@ForAll @IntRange(min = 2, max = 50) int numSequences,
                                      @ForAll @IntRange(min = 4, max = 32) int matchLen) {
         // Build a source with `numSequences` identical 8-byte chunks
@@ -444,7 +457,8 @@ class DecompressorFuzzTest {
      * verifying no exception is thrown — if it reads past the end it would either
      * return wrong data or throw AIOOBE.
      */
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void decompressorRespectsSourceBounds(@ForAll @Size(min = 1, max = 4096) byte[] src,
                                           @ForAll @IntRange(min = 0, max = 64) int gapBefore) {
         byte[] comp = LZ4.compress(src, 2);
@@ -462,7 +476,8 @@ class DecompressorFuzzTest {
 
     // ── K. Multi-block: compress/decompress blocks that span WINDOW_SIZE ──────
 
-    @Property(tries = 200)
+    @Property
+
     void multiBlockWindowSpanning(@ForAll @IntRange(min = 1, max = 4) int numBlocks,
                                   @ForAll @IntRange(min = 1, max = 4) int patLen) {
         int blockSize = LZ4.WINDOW_SIZE;
@@ -541,7 +556,8 @@ class DecompressorFuzzTest {
 
     // ── M. Property: any valid yawkat-compressed input, femto always succeeds ──
 
-    @Property(tries = 3000)
+    @Property
+    @Tag("deep-fuzz")
     void femtoAlwaysSucceedsOnYawkatOutput(@ForAll @Size(max = 32768) byte[] src) {
         byte[] tmp = new byte[YAWKAT.fastCompressor().maxCompressedLength(src.length)];
         int n = YAWKAT.fastCompressor().compress(src, 0, src.length, tmp, 0, tmp.length);
@@ -556,7 +572,8 @@ class DecompressorFuzzTest {
         }
     }
 
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void femtoAlwaysSucceedsOnYawkatHCOutput(@ForAll @Size(max = 16384) byte[] src) {
         var hc = YAWKAT.highCompressor();
         byte[] tmp = new byte[hc.maxCompressedLength(src.length)];

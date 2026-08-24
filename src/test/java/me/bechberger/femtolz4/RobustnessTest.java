@@ -69,14 +69,16 @@ class RobustnessTest {
 
     // ── Fuzz: arbitrary random garbage never crashes the decompressor ──────
 
-    @Property(tries = 2000)
+    @Property
+    @Tag("deep-fuzz")
     void randomGarbageNeverCrashes(@ForAll @Size(max = 2048) byte[] garbage,
                                    @IntRange(min = 0, max = 8192) @ForAll int dstLen) {
         assertSafeDecompress(garbage, dstLen);
         assertSafeDecompressJava(garbage, dstLen);
     }
 
-    @Property(tries = 500)
+    @Property
+
     void randomGarbageAsFrameNeverCrashes(@ForAll @Size(max = 4096) byte[] garbage) {
         assertSafeFrameDecompress(garbage);
     }
@@ -118,7 +120,8 @@ class RobustnessTest {
 
     // ── Crafted: output/input length lies designed to trip overflow checks ──
 
-    @Property(tries = 500)
+    @Property
+
     void craftedTokensWithRandomOverflowChainsNeverCrash(
             @ForAll @IntRange(min = 0, max = 15) int litNibble,
             @ForAll @IntRange(min = 0, max = 15) int matchNibble,

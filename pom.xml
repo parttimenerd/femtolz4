@@ -37,13 +37,18 @@
           Test suite selection (JUnit Platform tag filtering; applies to both
           JUnit Jupiter @Test and jqwik @Property, since jqwik's @Tag maps to
           the same platform tags):
-            mvn test                       -> fast suite (excludes "slow" and "deep-fuzz")
+            mvn test                       -> fast suite (excludes "slow", "deep-fuzz", "slow-fuzz")
             mvn test -Dtest.full=true      -> full suite (nothing excluded)
-            mvn test -Pfuzz                -> deep-fuzz suite: 20× more jqwik tries,
-                                             includes "deep-fuzz" tests, excludes "slow"
+            mvn test -Pfuzz                -> deep-fuzz suite: 50× more jqwik tries,
+                                             includes "deep-fuzz" and "slow-fuzz" tests,
+                                             excludes "slow" (non-property structural tests)
+          Tags:
+            "slow"      - non-property @Test that is too slow for normal runs
+            "deep-fuzz" - @Property fuzz tests; run with high tries in -Pfuzz
+            "slow-fuzz" - @Property fuzz tests with large inputs; run with moderate tries in -Pfuzz
         -->
         <test.full>false</test.full>
-        <test.excludedGroups>slow,deep-fuzz</test.excludedGroups>
+        <test.excludedGroups>slow,deep-fuzz,slow-fuzz</test.excludedGroups>
         <!-- jqwik default tries — overridden to 10000 in the fuzz profile -->
         <fuzz.tries.default>200</fuzz.tries.default>
     </properties>
@@ -144,9 +149,9 @@
         </profile>
 
         <!-- Activated by -Pfuzz: deep-fuzz mode.
-             Runs all fuzz tests (including deep-fuzz tag) with 50× more jqwik
-             tries than the normal suite.  Slow structural tests are still excluded
-             (they are not fuzz tests and would dominate the run time).
+             Runs all fuzz tests (including deep-fuzz and slow-fuzz tags) with
+             50× more jqwik tries than the normal suite.  Slow structural @Test
+             tests are still excluded (they are not property tests).
                mvn test -Pfuzz
                mvn test -Pfuzz -Dtest=YawkatFuzzTest   (single class)
         -->

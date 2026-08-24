@@ -5,6 +5,6 @@ hs_err_pid*.log
 *.iml
 .idea/
 bench-data/
-src/main/resources/native/
 *.class
 lz4-prof/
+src/main/resources/native/

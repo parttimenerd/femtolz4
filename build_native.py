@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import platform
 import shutil
@@ -52,6 +53,21 @@ def run(cmd: list[str], **kwargs) -> None:
     r = subprocess.run(cmd, **kwargs)
     if r.returncode != 0:
         sys.exit(r.returncode)
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    h.update(path.read_bytes())
+    return h.hexdigest()
+
+
+def install_if_changed(src: Path, dst: Path) -> None:
+    """Copy src → dst only if content differs; preserves git working-tree cleanliness."""
+    if dst.exists() and _sha256(src) == _sha256(dst):
+        print(f"  → {dst}  (unchanged, {dst.stat().st_size // 1024} KB)")
+        return
+    shutil.copy2(src, dst)
+    print(f"  → {dst}  ({dst.stat().st_size // 1024} KB)")
 
 
 def host_os() -> str:
@@ -129,18 +145,23 @@ def build_linux_amd64_native() -> None:
     extra_inc = [f"-I{inc / 'linux'}"] if (inc / "linux").exists() else []
 
     cc = shutil.which("gcc") or shutil.which("clang") or "gcc"
-    run([
-        cc, "-O3",
-        "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
-        "-shared", "-fPIC", "-fvisibility=hidden",
-        f"-I{inc}", *extra_inc,
-        f"-I{NATIVE_SRC}",
-        str(NATIVE_SRC / "femtolz4_jni.c"),
-        "-o", str(out),
-    ])
-    strip = shutil.which("strip") or "strip"
-    run([strip, "--strip-unneeded", str(out)])
-    print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
+    with tempfile.NamedTemporaryFile(suffix=".so", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        run([
+            cc, "-O3",
+            "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
+            "-shared", "-fPIC", "-fvisibility=hidden",
+            f"-I{inc}", *extra_inc,
+            f"-I{NATIVE_SRC}",
+            str(NATIVE_SRC / "femtolz4_jni.c"),
+            "-o", str(tmp_path),
+        ])
+        strip = shutil.which("strip") or "strip"
+        run([strip, "--strip-unneeded", str(tmp_path)])
+        install_if_changed(tmp_path, out)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def build_linux_amd64_cross() -> None:
@@ -157,27 +178,32 @@ def build_linux_amd64_cross() -> None:
     inc = find_java_include("linux-amd64")
     extra_inc = [f"-I{inc / 'linux'}"] if (inc / "linux").exists() else []
 
-    run([
-        cross_cc, "-O3",
-        "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
-        "-shared", "-fPIC", "-fvisibility=hidden",
-        f"-I{inc}", *extra_inc,
-        f"-I{NATIVE_SRC}",
-        str(NATIVE_SRC / "femtolz4_jni.c"),
-        # Do not link against musl libc: the JVM process provides glibc, so
-        # any libc symbols we reference (memcpy etc.) resolve from the JVM's
-        # glibc at dlopen time.  This keeps the .so free of any libc dependency
-        # and works on both glibc and musl Linux systems.
-        "-nostdlib", "-static-libgcc",
-        "-o", str(out),
-    ])
-    # macOS strip cannot parse ELF; use llvm-strip or accept the larger binary
-    llvm_strip = shutil.which("llvm-strip") or shutil.which("x86_64-linux-musl-strip")
-    if llvm_strip:
-        run([llvm_strip, "--strip-unneeded", str(out)])
-    else:
-        print("  (strip skipped — llvm-strip / musl-strip not found)")
-    print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
+    with tempfile.NamedTemporaryFile(suffix=".so", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        run([
+            cross_cc, "-O3",
+            "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
+            "-shared", "-fPIC", "-fvisibility=hidden",
+            f"-I{inc}", *extra_inc,
+            f"-I{NATIVE_SRC}",
+            str(NATIVE_SRC / "femtolz4_jni.c"),
+            # Do not link against musl libc: the JVM process provides glibc, so
+            # any libc symbols we reference (memcpy etc.) resolve from the JVM's
+            # glibc at dlopen time.  This keeps the .so free of any libc dependency
+            # and works on both glibc and musl Linux systems.
+            "-nostdlib", "-static-libgcc",
+            "-o", str(tmp_path),
+        ])
+        # macOS strip cannot parse ELF; use llvm-strip or accept the larger binary
+        llvm_strip = shutil.which("llvm-strip") or shutil.which("x86_64-linux-musl-strip")
+        if llvm_strip:
+            run([llvm_strip, "--strip-unneeded", str(tmp_path)])
+        else:
+            print("  (strip skipped — llvm-strip / musl-strip not found)")
+        install_if_changed(tmp_path, out)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def build_darwin_aarch64_native() -> None:
@@ -189,18 +215,23 @@ def build_darwin_aarch64_native() -> None:
     extra_inc = [f"-I{inc / 'darwin'}"] if (inc / "darwin").exists() else []
 
     cc = shutil.which("clang") or "clang"
-    run([
-        cc, "-O3",
-        "-arch", "arm64",
-        "-shared", "-fPIC", "-fvisibility=hidden",
-        f"-I{inc}", *extra_inc,
-        f"-I{NATIVE_SRC}",
-        str(NATIVE_SRC / "femtolz4_jni.c"),
-        "-o", str(out),
-    ])
-    run(["strip", "-x", str(out)])
-    print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
-
+    with tempfile.NamedTemporaryFile(suffix=".dylib", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        run([
+            cc, "-O3",
+            "-arch", "arm64",
+            "-shared", "-fPIC", "-fvisibility=hidden",
+            "-Wl,-reproducible",   # deterministic output — prevents spurious git diffs
+            f"-I{inc}", *extra_inc,
+            f"-I{NATIVE_SRC}",
+            str(NATIVE_SRC / "femtolz4_jni.c"),
+            "-o", str(tmp_path),
+        ])
+        run(["strip", "-x", str(tmp_path)])
+        install_if_changed(tmp_path, out)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def default_targets() -> list[str]:

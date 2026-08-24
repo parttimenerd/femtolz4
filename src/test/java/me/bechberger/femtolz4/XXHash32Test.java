@@ -28,12 +28,14 @@ class XXHash32Test {
 
     // ── Property: matches the reference implementation on arbitrary input ───────
 
-    @Property(tries = 1000)
+    @Property
+    @Tag("deep-fuzz")
     void matchesOracleWholeArray(@ForAll @Size(max = 8192) byte[] data) {
         assertEquals(oracleHash(data, 0, data.length), XXHash32.hash(data, 0, data.length));
     }
 
-    @Property(tries = 500)
+    @Property
+
     void matchesOracleWithOffsetAndLength(@ForAll @Size(min = 1, max = 8192) byte[] data,
                                           @ForAll int rawOff,
                                           @ForAll int rawLen) {
@@ -44,14 +46,16 @@ class XXHash32Test {
 
     // ── Property: same input, same output (determinism) ─────────────────────────
 
-    @Property(tries = 200)
+    @Property
+
     void deterministic(@ForAll @Size(max = 4096) byte[] data) {
         assertEquals(XXHash32.hash(data, 0, data.length), XXHash32.hash(data, 0, data.length));
     }
 
     // ── Property: byte-for-byte-equal inputs of varying lengths all match oracle ─
 
-    @Property(tries = 300)
+    @Property
+
     void matchesOracleAcrossLengths(@ForAll @IntRange(min = 0, max = 4096) int len,
                                     @ForAll long seed) {
         byte[] data = randomBytes(len, seed);
@@ -87,7 +91,8 @@ class XXHash32Test {
 
     // ── Sizes around the 4-byte lane boundary and typical block sizes ───────────
 
-    @Property(tries = 100)
+    @Property
+
     void matchesOracleNearLaneBoundaries(@ForAll @IntRange(min = 0, max = 20) int delta,
                                          @ForAll long seed) {
         int len = Math.max(0, 4 * 50 + delta - 10); // spans a few lengths around multiples of 4
