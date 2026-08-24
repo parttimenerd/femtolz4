@@ -12,13 +12,14 @@ Steps:
   7. Create GitHub release with gh CLI
 
 Usage:
-  python3 release.py               # bump minor version (default)
-  python3 release.py --patch       # bump patch version
-  python3 release.py --major       # bump major version
-  python3 release.py --no-bump     # release current version as-is (no version change)
-  python3 release.py --dry-run     # show what would happen, change nothing
-  python3 release.py --no-push     # skip git push and GitHub release
-  python3 release.py --no-deploy   # skip Maven Central deployment
+  python3 release.py                      # bump minor version (default)
+  python3 release.py --patch              # bump patch version
+  python3 release.py --major              # bump major version
+  python3 release.py --no-bump            # release current version as-is (no version change)
+  python3 release.py --dry-run            # show what would happen, change nothing
+  python3 release.py --no-push            # skip git push and GitHub release
+  python3 release.py --no-deploy          # skip Maven Central deployment
+  python3 release.py --github-release-only  # only create GitHub release for current version
 """
 
 from __future__ import annotations
@@ -148,6 +149,8 @@ def main() -> None:
                         help="Skip git push and GitHub release")
     parser.add_argument("--no-deploy",  action="store_true",
                         help="Skip Maven Central deployment")
+    parser.add_argument("--github-release-only", action="store_true",
+                        help="Only create GitHub release for current version (skip everything else)")
     parser.add_argument("--dry-run",    action="store_true",
                         help="Print planned steps, change nothing")
     parser.add_argument("--skip-tests", action="store_true",
@@ -156,7 +159,7 @@ def main() -> None:
 
     old = get_version()
 
-    if args.no_bump:
+    if args.no_bump or args.github_release_only:
         new = old
     else:
         kind = "major" if args.major else "patch" if args.patch else "minor"
@@ -164,9 +167,34 @@ def main() -> None:
 
     print(f"Current version : {old}")
     print(f"Release version : {new}")
-    if not args.no_bump:
+    if not args.no_bump and not args.github_release_only:
         kind = "major" if args.major else "patch" if args.patch else "minor"
         print(f"Bump kind       : {kind}")
+
+    # ── GitHub-release-only shortcut ─────────────────────────────────────────
+    if args.github_release_only:
+        jar = ROOT / "target" / f"femtolz4-{new}.jar"
+        assets = [str(jar)] if jar.exists() else []
+        changelog_entry = get_changelog_entry(new)
+        notes_file = ROOT / ".release-notes.md"
+        if changelog_entry:
+            notes_file.write_text(changelog_entry)
+            notes_args: list[str] = ["--notes-file", str(notes_file)]
+        else:
+            notes_args = ["--generate-notes"]
+        try:
+            run([
+                "gh", "release", "create", f"v{new}",
+                "--title", f"femtolz4 {new}",
+                *notes_args,
+                *assets,
+            ], f"Creating GitHub release v{new}")
+        finally:
+            if notes_file.exists():
+                notes_file.unlink()
+        print(f"\n✓ GitHub release v{new} created")
+        return
+    # ─────────────────────────────────────────────────────────────────────────
 
     if args.dry_run:
         print("\nDry run — nothing changed.")
@@ -206,24 +234,22 @@ def main() -> None:
 
         # 2. Tests
         if not args.skip_tests:
-            run(["mvn", "test"], "Running tests")
+            run(["mvn", "clean", "test"], "Running tests")
 
         # 3. Native libs
         run(["python3", "build_native.py"], "Building native libraries")
 
         # 4. Package
-        run(["mvn", "package", "-DskipTests", "-Dnative.skip=true"], "Packaging JAR")
+        run(["mvn", "clean", "package", "-DskipTests", "-Dnative.skip=true"], "Packaging JAR")
 
         # 5. Deploy to Maven Central
         if not args.no_deploy:
-            run(["mvn", "deploy", "-P", "release", "-DskipTests", "-Dnative.skip=true"],
+            run(["mvn", "clean", "deploy", "-P", "release", "-DskipTests", "-Dnative.skip=true"],
                 "Deploying to Maven Central")
 
         # 6. Commit + tag
         files_to_add = [
             "pom.xml", "CHANGELOG.md",
-            "src/main/resources/native/darwin-aarch64/libfemtolz4.dylib",
-            "src/main/resources/native/linux-amd64/libfemtolz4.so",
         ]
         if not args.no_bump and (ROOT / "README.md").exists():
             files_to_add.insert(1, "README.md")
