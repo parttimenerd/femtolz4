@@ -131,8 +131,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          JAR=$(ls dist/femtolz4-*.jar)
-          gh release create snapshot "$JAR" \
+          gh release create snapshot dist/femtolz4-*.jar \
             --title "femtolz4 snapshot" \
             --notes "Automated snapshot for ${GITHUB_SHA}" \
             --prerelease
