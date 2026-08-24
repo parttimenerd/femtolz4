@@ -1,7 +1,6 @@
 package me.bechberger.femtolz4;
 
 import net.jpountz.lz4.LZ4Factory;
-import net.jpountz.lz4.LZ4FrameInputStream;
 
 import java.io.*;
 import java.nio.file.*;
@@ -9,7 +8,7 @@ import java.util.*;
 
 /**
  * Throughput benchmark using the frame stream API — the normal user-facing path.
- * Each impl compresses via LZ4FrameOutputStream (splits into 1MB blocks) and
+ * Each impl compresses via LZ4FrameOutputStream (splits into 4MB blocks) and
  * decompresses via LZ4FrameInputStream, matching real-world usage.
  *
  * Prints a WARNING if any femtolz4 impl's compression ratio is worse than
@@ -96,8 +95,7 @@ public class Benchmark {
             public byte[] compress(byte[] src) throws IOException {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream(src.length / 2 + 256);
                 try (net.jpountz.lz4.LZ4FrameOutputStream out =
-                         new net.jpountz.lz4.LZ4FrameOutputStream(baos,
-                             net.jpountz.lz4.LZ4FrameOutputStream.BLOCKSIZE.SIZE_1MB)) {
+                         new net.jpountz.lz4.LZ4FrameOutputStream(baos)) {
                     out.write(src);
                 }
                 return baos.toByteArray();

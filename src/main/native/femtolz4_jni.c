@@ -133,12 +133,24 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
         } else if (offset == 1) {
             /* Run of one repeated byte: fill is fastest. */
             memset(dst + op, dst[ms], (size_t)match_len);
+        } else if (offset >= 8) {
+            /* Lockstep copy: src advances in tandem with dst.  After offset steps
+               src reaches the start of the written output and begins reading back
+               the established pattern — correct for any offset >= 8. */
+            const uint8_t *s = dst + ms;
+            uint8_t *d = dst + op;
+            int64_t rem = match_len;
+            while (rem >= 16) {
+                __builtin_memcpy(d,     s,     8);
+                __builtin_memcpy(d + 8, s + 8, 8);
+                d += 16; s += 16; rem -= 16;
+            }
+            while (rem >= 8) { __builtin_memcpy(d, s, 8); d += 8; s += 8; rem -= 8; }
+            while (rem > 0) { *d++ = *s++; rem--; }
         } else {
-            /* Overlapping match (offset < match_len, offset >= 2):
-               Build up a 16-byte tile by doubling the pattern, then
-               blast forward with 16-byte copies.  The key property:
-               after each copy step dst[op..op+copied-1] = the tiled
-               pattern, so reading from dst[op+copied-16..] is valid. */
+            /* Overlapping match (offset < match_len, 2 <= offset <= 7):
+               Prime an 8-byte tile by doubling, then blast forward in 8-byte strides
+               reading from the just-written output. */
             uint8_t *d  = dst + op;
             int64_t rem = match_len;
             int64_t c   = 0;
@@ -157,25 +169,16 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
                 __builtin_memcpy(d + c, d, (size_t)(8 - c));
                 c = 8;
             }
-            /* Extend to 16. */
-            if (c < 16 && rem >= 16) {
-                __builtin_memcpy(d + c, d, (size_t)(16 - c));
-                c = 16;
+
+            /* Blast: 8-byte copies reading from the period-aligned tile. */
+            while (c + 8 <= rem) {
+                __builtin_memcpy(d + c, d + c - 8, 8);
+                c += 8;
             }
 
-            /* Blast: 16-byte copies reading from the previous 16 bytes. */
-            while (c + 16 <= rem) {
-                __builtin_memcpy(d + c, d + c - 16, 16);
-                c += 16;
-            }
-
-            /* Tail: fill the remaining < 16 bytes from the start of the tile. */
-            if (c < rem) {
-                /* c >= 8 here (either via the extend steps or because offset >= 8),
-                   or c == offset if rem < 8; in both cases d[0..min(c,16)-1] holds
-                   a valid tiled pattern, so mod-wrapping via (rem-c) is safe. */
+            /* Tail: remaining < 8 bytes. */
+            if (c < rem)
                 __builtin_memcpy(d + c, d, (size_t)(rem - c));
-            }
         }
         op += (int)match_len;
     }

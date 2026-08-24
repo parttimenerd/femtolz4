@@ -43,6 +43,8 @@ final class NativeLZ4 {
         String arch = System.getProperty("os.arch", "").toLowerCase();
         if (os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64")))
             return "/native/linux-amd64/libfemtolz4.so";
+        if (os.contains("mac") && (arch.equals("aarch64") || arch.equals("arm64")))
+            return "/native/darwin-aarch64/libfemtolz4.dylib";
         return null;
     }
 

@@ -32,7 +32,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
     private static final int[] LEVEL_TO_MAX_CHAIN = {1, 2, 4, 6, 8, 12, 16, 32, 64};
 
     /** Default block size: 1 MiB. */
-    public static final int DEFAULT_BLOCK_SIZE = 1 << 20;
+    public static final int DEFAULT_BLOCK_SIZE = 4 << 20;
 
     /** Minimum public compression level. */
     public static final int MIN_LEVEL = 1;
@@ -106,12 +106,19 @@ public final class LZ4FrameOutputStream extends OutputStream {
         ensureOpen();
         ensureHeader();
         while (len > 0) {
-            int chunk = Math.min(len, blockSize - inputPos);
-            System.arraycopy(b, off, inputBuf, inputPos, chunk);
-            inputPos += chunk;
-            off += chunk;
-            len -= chunk;
-            if (inputPos == blockSize) flushBlock();
+            if (inputPos == 0 && len >= blockSize) {
+                /* Compress directly from caller's buffer — avoids a full-block arraycopy. */
+                flushBlock(b, off, blockSize);
+                off += blockSize;
+                len -= blockSize;
+            } else {
+                int chunk = Math.min(len, blockSize - inputPos);
+                System.arraycopy(b, off, inputBuf, inputPos, chunk);
+                inputPos += chunk;
+                off += chunk;
+                len -= chunk;
+                if (inputPos == blockSize) flushBlock();
+            }
         }
     }
 
@@ -158,12 +165,20 @@ public final class LZ4FrameOutputStream extends OutputStream {
     }
 
     private void flushBlock() throws IOException {
-        int comp    = compressor.compress(inputBuf, 0, inputPos, compBuf, 0, compBuf.length);
-        boolean raw = comp >= inputPos;
-        int payload = raw ? inputPos : comp;
-        writeLE32(raw ? (inputPos | 0x80000000) : comp);
-        out.write(raw ? inputBuf : compBuf, 0, payload);
+        flushBlock(inputBuf, 0, inputPos);
         inputPos = 0;
+    }
+
+    private void flushBlock(byte[] src, int srcOff, int srcLen) throws IOException {
+        int comp    = compressor.compress(src, srcOff, srcLen, compBuf, 0, compBuf.length);
+        boolean raw = comp >= srcLen;
+        int payload = raw ? srcLen : comp;
+        writeLE32(raw ? (srcLen | 0x80000000) : comp);
+        if (raw) {
+            out.write(src, srcOff, payload);
+        } else {
+            out.write(compBuf, 0, payload);
+        }
     }
 
     private void writeLE32(int v) throws IOException {

@@ -360,7 +360,7 @@ static int lz4__compress_block_chain(lz4_stream_t *s,
             if (skip_ctr < (17 << 6)) skip_ctr++;
             pos += step;
             miss_bytes += step;
-            if (pos >= src_len) break;
+            if (pos >= src_len) { pos = src_len; break; }
         }
 
         int match_dist = 0;

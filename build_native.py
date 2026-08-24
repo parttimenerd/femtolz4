@@ -180,13 +180,37 @@ def build_linux_amd64_cross() -> None:
     print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
 
 
-# ── Target registry ─────────────────────────────────────────────────────────────
+def build_darwin_aarch64_native() -> None:
+    """Build darwin-aarch64 dylib natively on Apple Silicon."""
+    out = NATIVE_OUT / "darwin-aarch64" / "libfemtolz4.dylib"
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    inc = find_java_include("darwin-aarch64")
+    extra_inc = [f"-I{inc / 'darwin'}"] if (inc / "darwin").exists() else []
+
+    cc = shutil.which("clang") or "clang"
+    run([
+        cc, "-O3",
+        "-arch", "arm64",
+        "-shared", "-fPIC", "-fvisibility=hidden",
+        f"-I{inc}", *extra_inc,
+        f"-I{NATIVE_SRC}",
+        str(NATIVE_SRC / "femtolz4_jni.c"),
+        "-o", str(out),
+    ])
+    run(["strip", "-x", str(out)])
+    print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
+
+
 
 def default_targets() -> list[str]:
     os_  = host_os()
     arch = host_arch()
     if os_ == "macos":
-        return ["linux-amd64"]
+        targets = ["linux-amd64"]
+        if arch == "aarch64":
+            targets.append("darwin-aarch64")
+        return targets
     if os_ == "linux" and arch == "amd64":
         return ["linux-amd64"]
     print(f"No default targets defined for {os_}/{arch}. Pass targets explicitly.")
@@ -195,8 +219,9 @@ def default_targets() -> list[str]:
 
 TARGETS = {
     # (host_os, target)  ->  build function
-    ("macos",  "linux-amd64"):    build_linux_amd64_cross,
-    ("linux",  "linux-amd64"):    build_linux_amd64_native,
+    ("macos",  "linux-amd64"):      build_linux_amd64_cross,
+    ("macos",  "darwin-aarch64"):   build_darwin_aarch64_native,
+    ("linux",  "linux-amd64"):      build_linux_amd64_native,
 }
 
 
