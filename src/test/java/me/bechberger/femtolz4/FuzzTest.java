@@ -21,6 +21,11 @@ class FuzzTest {
     private static final LZ4FastDecompressor YAWKAT_DEC = YAWKAT.fastDecompressor();
     private static final LZ4Compressor       YAWKAT_ENC = YAWKAT.fastCompressor();
 
+    @Provide
+    Arbitrary<Integer> allChains() {
+        return Arbitraries.of(0, 1, 2, 4, 8, 16, 64, 256);
+    }
+
     // ── Round-trip: femtolz4 compress → femtolz4 decompress ─────────────────
 
     @Property
@@ -34,7 +39,7 @@ class FuzzTest {
     @Property
 
     void roundTripChain(@ForAll @Size(max = 32768) byte[] data,
-                        @ForAll @IntRange(min = 2, max = 8) int chain) {
+                        @ForAll("allChains") int chain) {
         byte[] compressed   = LZ4.compress(data, chain);
         byte[] decompressed = LZ4.decompress(compressed, data.length);
         assertArrayEquals(data, decompressed);
@@ -53,7 +58,7 @@ class FuzzTest {
     @Property
 
     void roundTripJavaChain(@ForAll @Size(max = 32768) byte[] data,
-                            @ForAll @IntRange(min = 2, max = 8) int chain) {
+                            @ForAll("allChains") int chain) {
         byte[] compressed   = LZ4.compressJava(data, chain);
         byte[] decompressed = LZ4.decompressJava(compressed, data.length);
         assertArrayEquals(data, decompressed);
@@ -63,8 +68,9 @@ class FuzzTest {
 
     @Property
 
-    void femtoToYawkat(@ForAll @Size(min = 16, max = 65536) byte[] data) {
-        byte[] compressed = LZ4.compress(data, 1);
+    void femtoToYawkat(@ForAll @Size(min = 16, max = 65536) byte[] data,
+                       @ForAll("allChains") int chain) {
+        byte[] compressed = LZ4.compress(data, chain);
         byte[] dst        = new byte[data.length];
         // jpountz fastDecompressor requires any non-final literal run to end
         // at least 8 bytes before destEnd.  Inputs shorter than 16 bytes can
@@ -77,10 +83,12 @@ class FuzzTest {
     @Property(tries = 200)
     @Tag("slow-fuzz")
     void femtoToYawkatLarge(@ForAll @Size(min = 16, max = 10 * 1024 * 1024) byte[] data) {
-        byte[] compressed = LZ4.compress(data, 1);
-        byte[] dst        = new byte[data.length];
-        YAWKAT_DEC.decompress(compressed, 0, dst, 0, data.length);
-        assertArrayEquals(data, dst);
+        for (int chain : new int[]{0, 1, 256}) {
+            byte[] compressed = LZ4.compress(data, chain);
+            byte[] dst        = new byte[data.length];
+            YAWKAT_DEC.decompress(compressed, 0, dst, 0, data.length);
+            assertArrayEquals(data, dst, "chain=" + chain);
+        }
     }
 
     // ── Cross-compat: yawkat → femtolz4 ──────────────────────────────────────
@@ -98,7 +106,7 @@ class FuzzTest {
     @Property
     @Tag("deep-fuzz")
     void allChainDepths(@ForAll @Size(max = 16384) byte[] data) {
-        for (int chain : new int[]{1, 2, 4, 8, 16, 64}) {
+        for (int chain : new int[]{0, 1, 2, 4, 8, 16, 64, 256}) {
             byte[] compressed   = LZ4.compress(data, chain);
             byte[] decompressed = LZ4.decompress(compressed, data.length);
             assertArrayEquals(data, decompressed, "round-trip failed at chain=" + chain);

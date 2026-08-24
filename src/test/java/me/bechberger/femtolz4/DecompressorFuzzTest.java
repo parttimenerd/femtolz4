@@ -38,6 +38,11 @@ class DecompressorFuzzTest {
     private static final LZ4Factory          YAWKAT     = LZ4Factory.safeInstance();
     private static final LZ4FastDecompressor YAWKAT_DEC = YAWKAT.fastDecompressor();
 
+    @Provide
+    Arbitrary<Integer> allChains() {
+        return Arbitraries.of(0, 1, 2, 4, 8, 256);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static byte[] yawkatDecompress(byte[] comp, int len) {
@@ -164,8 +169,9 @@ class DecompressorFuzzTest {
     @Property
     @Tag("deep-fuzz")
     void singleByteMutationNeverCrashes(@ForAll @Size(min = 1, max = 1024) byte[] src,
-                                        @ForAll @IntRange(min = 0, max = 255) int replaceByte) {
-        byte[] comp = LZ4.compress(src, 1);
+                                        @ForAll @IntRange(min = 0, max = 255) int replaceByte,
+                                        @ForAll("allChains") int chain) {
+        byte[] comp = LZ4.compress(src, chain);
         for (int i = 0; i < comp.length; i++) {
             byte[] mutated = comp.clone();
             mutated[i] = (byte) replaceByte;
@@ -178,8 +184,9 @@ class DecompressorFuzzTest {
 
     void randomByteSubstitutionNeverCrashes(@ForAll @Size(min = 8, max = 2048) byte[] src,
                                             @ForAll @IntRange(min = 0, max = 20) int numMutations,
-                                            @ForAll long seed) {
-        byte[] comp = LZ4.compress(src, 4);
+                                            @ForAll long seed,
+                                            @ForAll("allChains") int chain) {
+        byte[] comp = LZ4.compress(src, chain);
         Random rng = new Random(seed);
         byte[] mutated = comp.clone();
         for (int m = 0; m < numMutations && mutated.length > 0; m++) {
@@ -191,8 +198,9 @@ class DecompressorFuzzTest {
 
     @Property
 
-    void truncationAtEveryPointNeverCrashes(@ForAll @Size(min = 4, max = 512) byte[] src) {
-        byte[] comp = LZ4.compress(src, 1);
+    void truncationAtEveryPointNeverCrashes(@ForAll @Size(min = 4, max = 512) byte[] src,
+                                            @ForAll("allChains") int chain) {
+        byte[] comp = LZ4.compress(src, chain);
         for (int len = 0; len <= comp.length; len++) {
             byte[] truncated = Arrays.copyOf(comp, len);
             assertSafeJava(truncated, src.length);

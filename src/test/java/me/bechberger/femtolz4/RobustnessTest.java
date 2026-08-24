@@ -44,6 +44,19 @@ class RobustnessTest {
         }
     }
 
+    @Property
+    @Tag("deep-fuzz")
+    void everyTruncationAllChains(@ForAll @Size(min = 64, max = 4096) byte[] src,
+                                  @ForAll @IntRange(min = 0, max = 5) int chainIdx) {
+        int chain = new int[]{0, 1, 2, 4, 8, 256}[chainIdx];
+        byte[] comp = LZ4.compress(src, chain);
+        for (int len = 0; len < comp.length; len++) {
+            byte[] truncated = Arrays.copyOf(comp, len);
+            assertSafeDecompress(truncated, src.length);
+            assertSafeDecompressJava(truncated, src.length);
+        }
+    }
+
     // ── Truncation: every possible prefix of a valid frame stream ───────────
 
     @Test void everyTruncationOfFrameStreamThrowsOrSucceeds() throws IOException {
