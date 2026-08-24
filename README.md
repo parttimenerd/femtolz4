@@ -210,11 +210,12 @@ mvn package -Dnative.skip=true
 
 ```bash
 mvn test                    # fast suite: unit, round-trip and property tests
+mvn test -Pfuzz             # deep-fuzz suite: 50× more jqwik tries, adds deep-fuzz tests
 mvn test -Dtest.full=true   # full suite: also runs slow/exhaustive tests
 mvn test -Dnative.skip=true # skip native build, exercise the pure-Java path only
 ```
 
-The test suite has 535 tests across eight test classes and uses
+The test suite has 559 tests across nine test classes and uses
 [jqwik](https://jqwik.net) for property-based fuzzing.
 
 **`RobustnessTest`** — the decompressor must never crash, only throw `LZ4Exception`:
@@ -240,12 +241,23 @@ The test suite has 535 tests across eight test classes and uses
 - mixed compressible/incompressible, adaptive-skip reset, Fibonacci-spaced matches,
 - 2000 cross-compatibility tries: every compressor mode → yawkat oracle.
 
+**`SpecFuzzTest`** — spec-derived invariants (S1–S10) for every LZ4 block format rule:
+- overflow chain encoding for all litLen and matchLen (15 + n×255 + r),
+- offset=0 rejected; offset=1 produces byte-run; max offset=65535 accepted,
+- offset past written output rejected; overlapping copy semantics (reads own output),
+- MFLIMIT compliance: all compressor modes verified against yawkat decoder,
+- source and dest bounds: no read past `srcOff+srcLen`, canary bytes beyond `dstLen`,
+- compressor invariants: determinism, `maxCompressedLength` bound, short inputs,
+- deep-fuzz (activated by `-Pfuzz`): random crash-safety, bit-flip, cross-compatibility.
+
 **`ProbeEdgeTest`** — structural edge cases: srcLen 0–11, back-to-back zero-literal
 tokens, large srcOff sentinel boundary, dstOff with matchLowerBound, copyLiterals
 at VarHandle boundaries (litLen 1–129), copyMatch exhaustive (offset 1–16 × len 4–64).
 
 Slow tests (large-payload fuzzing, exhaustive truncation at higher chain depths) are
 tagged `"slow"` and excluded by default; use `-Dtest.full=true` to include them.
+Deep-fuzz tests (high-volume property tests) are tagged `"deep-fuzz"` and activated
+by `-Pfuzz` (50× default jqwik tries) or `-Dtest.full=true`.
 
 ## Benchmark
 
