@@ -41,8 +41,6 @@ final class NativeLZ4 {
     private static String nativeResourcePath() {
         String os   = System.getProperty("os.name", "").toLowerCase();
         String arch = System.getProperty("os.arch", "").toLowerCase();
-        if (os.contains("mac") && arch.contains("aarch64"))
-            return "/native/darwin-aarch64/libfemtolz4.dylib";
         if (os.contains("linux") && (arch.equals("amd64") || arch.equals("x86_64")))
             return "/native/linux-amd64/libfemtolz4.so";
         return null;

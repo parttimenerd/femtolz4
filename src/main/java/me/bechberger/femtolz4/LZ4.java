@@ -15,23 +15,11 @@ public final class LZ4 {
 
     static final int WINDOW_SIZE = 1 << 16;
 
-    /* On AArch64 (Apple M-series, AWS Graviton, etc.) the Java JIT generates tighter
-       code than clang -O3 for the fast-path inner loop: measured ~40% faster on M4.
-       Use the Java path for compress on ARM to avoid the JNI overhead. */
-    static final boolean IS_AARCH64 =
-        System.getProperty("os.arch", "").toLowerCase().contains("aarch64");
-
     /** Sentinel for {@link LZ4Java#compressJavaImpl} repeatedSamplesHint: unknown. */
     static final int SAMPLE_COUNT_UNKNOWN = -1;
 
     /** Minimum src length before paying the cost of {@link #countRepeatedSamples}. */
     static final int X86_NATIVE_CHAIN_SAMPLE_MIN = 4096;
-
-    /**
-     * On AArch64, when an early offset-1 match is at least this long the native
-     * library has a vectorised fill path that outperforms the JIT for the RLE case.
-     */
-    static final int ARM_NATIVE_OFFSET1_MATCH_MIN = 256;
 
     /** Minimum HC compression level. */
     public static final int HC_MIN_LEVEL = 1;
@@ -154,11 +142,10 @@ public final class LZ4 {
     public static int compress(byte[] src, int srcOff, int srcLen,
                                byte[] dst, int dstOff, int maxChain) {
         if (srcLen == 0) return 0;
-        if (NativeLZ4.AVAILABLE && !IS_AARCH64 && maxChain > 0) {
+        if (NativeLZ4.AVAILABLE && maxChain > 0) {
             int repeatedSamples = (srcLen >= X86_NATIVE_CHAIN_SAMPLE_MIN)
                 ? LZ4Java.countRepeatedSamples(src, srcOff, srcLen) : 0;
-            boolean useJava = (maxChain == 1 && repeatedSamples >= 2 && repeatedSamples < 6)
-                || (maxChain >= 2 && LZ4Java.hasLongOffsetOneInEarlySequences(src, srcOff, srcLen));
+            boolean useJava = maxChain == 1 && repeatedSamples >= 2 && repeatedSamples < 6;
             if (!useJava) {
                 int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff, maxChain);
                 if (n > 0) return n;
@@ -222,7 +209,7 @@ public final class LZ4 {
      */
     public static int decompress(byte[] src, int srcOff, int srcLen,
                                  byte[] dst, int dstOff, int dstLen) {
-        if (NativeLZ4.AVAILABLE && !IS_AARCH64) {
+        if (NativeLZ4.AVAILABLE) {
             int n = NativeLZ4.decompress(src, srcOff, srcLen, dst, dstOff, dstLen);
             if (n >= 0) return n;
         }

@@ -2,12 +2,12 @@
 
 A small Java library for LZ4 block and frame compression.
 
-femtolz4 is an independent implementation of LZ4 written from first principles —
+femtolz4 is an independent implementation of LZ4 based on [LaurentChardon/lz4](https://github.com/LaurentChardon/lz4),
 no copied source, no vendored C library. The pure-Java path and the bundled C
 extension share the same algorithmic structure. The library picks the faster path
 automatically at runtime and falls back to pure Java everywhere else.
 
-The goal is a small, auditable codebase with competitive performance.
+The goal is a small codebase, with small (50KB) releases with competitive performance and an optimized native implementation for linux/amd64 included in every JAR.
 
 ## Install
 
@@ -135,7 +135,7 @@ Used internally for frame checksums; also available as a standalone utility.
 - `LZ4FrameOutputStream` writes block-independent frames only.
 - Header checksum, block checksum, and content checksum are verified when present.
 - Malformed or truncated input throws `LZ4Exception` — it never crashes.
-- Native acceleration is bundled for `darwin/aarch64` and `linux/amd64`;
+- Native acceleration is bundled for `linux/amd64`;
   all other platforms fall back to pure Java automatically.
 
 Frame feature support:
@@ -160,7 +160,7 @@ breadth for a much smaller, simpler codebase.
 | JAR size | ~876 KB | ~50 KB |
 | Lines of Java source | ~10 000 | ~2 000 |
 | Lines of C source | ~2 000 | ~850 |
-| Platforms with native acceleration | 7 | 2 (darwin/aarch64, linux/amd64) |
+| Platforms with native acceleration | 7 | 1 (linux/amd64) |
 | Dependencies at runtime | none | none |
 
 The `LZ4.Compressor` and `LZ4.Decompressor` interfaces are intentionally
@@ -188,12 +188,11 @@ The JAR lands at `target/femtolz4-0.1.0.jar`.
 
 ### Native libraries
 
-Pre-built native libraries for darwin/aarch64 and linux/amd64 are bundled in the
+Pre-built native library for linux/amd64 is bundled in the
 JAR under `native/<platform>/`. To rebuild from source:
 
 ```bash
-python3 build_native.py                  # all platforms
-python3 build_native.py darwin-aarch64   # one platform
+python3 build_native.py                  # linux-amd64
 python3 build_native.py linux-amd64
 python3 build_native.py --list           # show available targets
 ```
@@ -228,8 +227,9 @@ tagged `"slow"` and excluded by default; use `-Dtest.full=true` to include them.
 
 Measured on Apple M4 Pro (macOS), JDK 25.
 Comparison against [yawkat/lz4-java](https://github.com/yawkat/lz4-java) 1.11.0.
-`femto-fast` / `yawkat-fast` = fastest mode; `femto-hc` / `yawkat-hc` = best-ratio mode.
-`femto-java-*` forces the pure-Java path regardless of platform.
+`femto-fast` / `femto-hc` = dispatch path (Java on macOS, native on linux/amd64);
+`femto-java-*` forces the pure-Java path explicitly.
+`yawkat-native` is the yawkat library's native path; `yawkat-java` its pure-Java path.
 
 Run `./benchmark.sh` to regenerate with numbers from your own machine.
 

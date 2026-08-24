@@ -3,7 +3,6 @@
 Build the femtolz4 native libraries.
 
 Targets:
-  darwin-aarch64   built natively on macOS with clang
   linux-amd64      built natively on Linux, or cross-compiled on macOS
                    using x86_64-linux-musl-gcc (brew install FiloSottile/musl-cross/musl-cross)
 
@@ -13,7 +12,7 @@ script downloads a minimal Temurin JDK tarball and extracts only the headers.
 
 Usage:
   python3 build_native.py               # build all targets for this host
-  python3 build_native.py darwin-aarch64 linux-amd64
+  python3 build_native.py linux-amd64
   python3 build_native.py --list        # show available targets
 """
 
@@ -43,11 +42,6 @@ TEMURIN_HEADERS = {
         "https://github.com/adoptium/temurin21-binaries/releases/download/"
         "jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_linux_hotspot_21.0.5_11.tar.gz",
         "jdk-21.0.5+11/include",
-    ),
-    "darwin-aarch64": (
-        "https://github.com/adoptium/temurin21-binaries/releases/download/"
-        "jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz",
-        "jdk-21.0.5+11/Contents/Home/include",
     ),
 }
 
@@ -127,26 +121,6 @@ def find_java_include(target: str) -> Path:
 
 # ── Per-target build functions ──────────────────────────────────────────────────
 
-def build_darwin_aarch64() -> None:
-    out = NATIVE_OUT / "darwin-aarch64" / "libfemtolz4.dylib"
-    out.parent.mkdir(parents=True, exist_ok=True)
-
-    inc = find_java_include("darwin-aarch64")
-    # clang on macOS knows darwin/jni_md.h via the SDK; pass the platform subdir too
-    extra_inc = [f"-I{inc / 'darwin'}"] if (inc / "darwin").exists() else []
-
-    run([
-        "clang", "-O3", "-march=native", "-shared", "-fPIC",
-        f"-I{inc}", *extra_inc,
-        f"-I{NATIVE_SRC}",
-        str(NATIVE_SRC / "femtolz4_jni.c"),
-        "-dynamiclib",
-        "-o", str(out),
-    ])
-    run(["strip", "-x", str(out)])
-    print(f"  → {out}  ({out.stat().st_size // 1024} KB)")
-
-
 def build_linux_amd64_native() -> None:
     out = NATIVE_OUT / "linux-amd64" / "libfemtolz4.so"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -158,7 +132,7 @@ def build_linux_amd64_native() -> None:
     run([
         cc, "-O3",
         "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
-        "-shared", "-fPIC",
+        "-shared", "-fPIC", "-fvisibility=hidden",
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),
@@ -186,7 +160,7 @@ def build_linux_amd64_cross() -> None:
     run([
         cross_cc, "-O3",
         "-mavx2", "-mfma", "-mbmi", "-mbmi2", "-mpopcnt",
-        "-shared", "-fPIC",
+        "-shared", "-fPIC", "-fvisibility=hidden",
         f"-I{inc}", *extra_inc,
         f"-I{NATIVE_SRC}",
         str(NATIVE_SRC / "femtolz4_jni.c"),
@@ -212,7 +186,7 @@ def default_targets() -> list[str]:
     os_  = host_os()
     arch = host_arch()
     if os_ == "macos":
-        return ["darwin-aarch64", "linux-amd64"]
+        return ["linux-amd64"]
     if os_ == "linux" and arch == "amd64":
         return ["linux-amd64"]
     print(f"No default targets defined for {os_}/{arch}. Pass targets explicitly.")
@@ -221,7 +195,6 @@ def default_targets() -> list[str]:
 
 TARGETS = {
     # (host_os, target)  ->  build function
-    ("macos",  "darwin-aarch64"): build_darwin_aarch64,
     ("macos",  "linux-amd64"):    build_linux_amd64_cross,
     ("linux",  "linux-amd64"):    build_linux_amd64_native,
 }

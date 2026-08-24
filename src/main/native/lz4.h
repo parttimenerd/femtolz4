@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /*
- * femtolz4 only ships little-endian native builds (darwin-aarch64, linux-amd64).
+ * femtolz4 only ships little-endian native builds (linux-amd64).
  *
  * Spec references:
  *   LZ4 block format: https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md

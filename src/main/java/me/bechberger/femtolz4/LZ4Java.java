@@ -36,14 +36,6 @@ public final class LZ4Java {
     private static final ThreadLocal<long[]> TL_FAST2_HEAD = ThreadLocal.withInitial(() -> {
         long[] t = new long[HASH_SIZE_FAST * 2]; Arrays.fill(t, FAST_SENTINEL); return t;
     });
-    /*
-     * Virtual-position bases for TL_FAST_HEAD and TL_FAST2_HEAD.
-     * Incremented by WINDOW_SIZE + srcLen each call so positions from prior blocks are
-     * always outside the current window — no Arrays.fill needed between calls.
-     * Stored as long[1]; reset to WINDOW_SIZE (+ re-fill table) on 32-bit overflow.
-     */
-    private static final ThreadLocal<long[]> TL_FAST_BASE  = ThreadLocal.withInitial(() -> new long[]{WINDOW_SIZE});
-    private static final ThreadLocal<long[]> TL_FAST2_BASE = ThreadLocal.withInitial(() -> new long[]{WINDOW_SIZE});
     /* Chain tables: head[] filled NIL before each block; tail[] only read from valid heads. */
     private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
     private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
@@ -153,7 +145,7 @@ public final class LZ4Java {
         }
         int repeatedSamples = repeatedSamplesHint != LZ4.SAMPLE_COUNT_UNKNOWN
             ? repeatedSamplesHint
-            : (!LZ4.IS_AARCH64 && srcLen >= LZ4.X86_NATIVE_CHAIN_SAMPLE_MIN
+            : (srcLen >= LZ4.X86_NATIVE_CHAIN_SAMPLE_MIN
                 ? countRepeatedSamples(src, srcOff, srcLen) : 0);
         boolean recoverMixedBoundary = repeatedSamples >= 2 && repeatedSamples < 6;
         if (maxChain == 2) {
@@ -458,15 +450,8 @@ public final class LZ4Java {
     private static int compressFast2Way(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head    = TL_FAST2_HEAD.get();
-        long[] baseArr = TL_FAST2_BASE.get();
-        int    base    = (int) baseArr[0];
-        long nextBase  = (long) base + WINDOW_SIZE + srcLen;
-        if (nextBase > Integer.MAX_VALUE - WINDOW_SIZE - 4 * 1024 * 1024) {
-            nextBase = WINDOW_SIZE;
-            Arrays.fill(head, FAST_SENTINEL);
-        }
-        baseArr[0] = nextBase;
+        long[] head   = TL_FAST2_HEAD.get();
+        Arrays.fill(head, FAST_SENTINEL);
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -476,8 +461,6 @@ public final class LZ4Java {
         int safeEnd2  = safeEnd - 1;
         int missBytes = 0;
         int skipCtr   = 2 << 6;
-
-        int posBase = base - srcOff;
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
@@ -489,19 +472,19 @@ public final class LZ4Java {
 
                 long s0 = head[bi], s1 = head[bi + 1];
                 head[bi + 1] = s0;
-                head[bi]     = ((long) v4 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
+                head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
                 /* Speculatively compute pos+1 hash */
                 int v4_1 = (int) INT_LE.get(src, pos + 1);
                 int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-                int sv = (int) s0 - posBase;
+                int sv = (int) s0;
                 int matchSv = -1, matchLen = 0;
                 if (sv > pos - WINDOW_SIZE & (int)(s0 >>> 32) == v4) {
                     int len = extendMatch(src, sv, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = sv; matchLen = len; }
                 }
-                int sv1 = (int) s1 - posBase;
+                int sv1 = (int) s1;
                 if (sv1 != sv && sv1 > pos - WINDOW_SIZE & (int)(s1 >>> 32) == v4) {
                     if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, sv1, pos, safeEnd - pos);
@@ -532,17 +515,17 @@ public final class LZ4Java {
                 int bi1 = h1 << 1;
                 long ss0 = head[bi1], ss1 = head[bi1 + 1];
                 head[bi1 + 1] = ss0;
-                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1 + posBase) & 0xFFFFFFFFL);
+                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
                 pos++;
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
-                int svA = (int) ss0 - posBase;
+                int svA = (int) ss0;
                 matchSv = -1; matchLen = 0;
                 if (svA > pos - WINDOW_SIZE & (int)(ss0 >>> 32) == v4_1) {
                     int len = extendMatch(src, svA, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = svA; matchLen = len; }
                 }
-                int svB = (int) ss1 - posBase;
+                int svB = (int) ss1;
                 if (svB != svA && svB > pos - WINDOW_SIZE & (int)(ss1 >>> 32) == v4_1) {
                     if (matchLen == 0 || src[svB + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, svB, pos, safeEnd - pos);
@@ -599,17 +582,8 @@ public final class LZ4Java {
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head    = TL_FAST_HEAD.get();
-        long[] baseArr = TL_FAST_BASE.get();
-        int    base    = (int) baseArr[0];
-        /* Advance virtual base for next call so its positions fall outside the current window. */
-        long nextBase = (long) base + WINDOW_SIZE + srcLen;
-        if (nextBase > Integer.MAX_VALUE - WINDOW_SIZE - 4 * 1024 * 1024) {
-            /* 32-bit overflow imminent: reset base and re-initialise table. */
-            nextBase = WINDOW_SIZE;
-            Arrays.fill(head, FAST_SENTINEL);
-        }
-        baseArr[0] = nextBase;
+        long[] head = TL_FAST_HEAD.get();
+        Arrays.fill(head, FAST_SENTINEL);
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -617,12 +591,8 @@ public final class LZ4Java {
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
         int safeEnd2  = safeEnd - 1;
-        /* After 128 miss-bytes, skip with growing step (no insert); resets on match. */
         int missBytes = 0;
         int skipCtr   = 2 << 6;
-
-        /* Offset from srcOff into virtual position space. */
-        int posBase = base - srcOff;
 
         if (pos < safeEnd2) {
             int v4 = (int) INT_LE.get(src, pos);
@@ -630,9 +600,9 @@ public final class LZ4Java {
 
             while (pos < safeEnd2) {
                 long slot = head[h];
-                head[h] = ((long) v4 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
+                head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
-                int sv = (int) slot - posBase;  // back to src coordinates
+                int sv = (int) slot;
                 if (sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
                     int maxMatch = safeEnd - pos;
                     int len = extendMatch(src, sv, pos, maxMatch);
@@ -664,9 +634,9 @@ public final class LZ4Java {
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
                 long slot1 = head[h1];
-                head[h1] = ((long) v4_1 << 32) | ((pos + posBase) & 0xFFFFFFFFL);
+                head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
 
-                int sv1 = (int) slot1 - posBase;
+                int sv1 = (int) slot1;
                 if (sv1 > pos - WINDOW_SIZE & (int)(slot1 >>> 32) == v4_1) {
                     int maxMatch1 = safeEnd - pos;
                     int len1 = extendMatch(src, sv1, pos, maxMatch1);
@@ -810,87 +780,11 @@ public final class LZ4Java {
     }
 
     /**
-     * Returns true if early sequences contain an offset-1 match long enough
-     * that the native NEON fill path beats the JIT (AArch64 dispatch heuristic).
-     */
-    static boolean hasLongOffsetOneInEarlySequences(byte[] src, int srcOff, int srcLen) {
-        if (srcOff < 0 || srcLen <= 0 || srcOff > src.length - srcLen) return false;
-        int ip = srcOff;
-        int end = srcOff + srcLen;
-        for (int seq = 0; seq < 4 && ip < end; seq++) {
-            int token = src[ip++] & 0xff;
-            long literalLength = token >>> 4;
-            if (literalLength == 15) {
-                int value;
-                do {
-                    if (ip >= end) return false;
-                    value = src[ip++] & 0xff;
-                    literalLength += value;
-                } while (value == 255);
-            }
-            if ((long) ip + literalLength > end) return false;
-            ip += (int) literalLength;
-            if (ip >= end) break;
-            if (ip + 1 >= end) return false;
-
-            boolean offsetOne = (src[ip] & 0xff) == 1 && src[ip + 1] == 0;
-            ip += 2;
-
-            long matchLength = MIN_MATCH + (token & 0xf);
-            if ((token & 0xf) == 15) {
-                while (ip <= end - 8 && (long) LONG_LE.get(src, ip) == -1L) {
-                    matchLength += 8L * 255;
-                    ip += 8;
-                    if (offsetOne && matchLength >= LZ4.ARM_NATIVE_OFFSET1_MATCH_MIN) return true;
-                }
-                int value;
-                do {
-                    if (ip >= end) return false;
-                    value = src[ip++] & 0xff;
-                    matchLength += value;
-                    if (offsetOne && matchLength >= LZ4.ARM_NATIVE_OFFSET1_MATCH_MIN) return true;
-                } while (value == 255);
-            }
-            if (offsetOne && matchLength >= LZ4.ARM_NATIVE_OFFSET1_MATCH_MIN) return true;
-        }
-        return false;
-    }
-
-    /**
      * Copy litLen bytes from src[srcPos] to dst[dstPos], returning dstPos+litLen.
-     * Uses overlapping 8-byte VarHandle stores for sizes ≤ 64 — avoids arraycopy
-     * intrinsic overhead for common literal run sizes.
+     * VARIANT A: System.arraycopy for all sizes.
      */
     static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
-        if (litLen <= 64) {
-            if (litLen >= 32) {
-                LONG_LE.set(dst, dstPos,      (long) LONG_LE.get(src, srcPos));
-                LONG_LE.set(dst, dstPos + 8,  (long) LONG_LE.get(src, srcPos + 8));
-                LONG_LE.set(dst, dstPos + 16, (long) LONG_LE.get(src, srcPos + 16));
-                LONG_LE.set(dst, dstPos + 24, (long) LONG_LE.get(src, srcPos + 24));
-                LONG_LE.set(dst, dstPos + litLen - 32, (long) LONG_LE.get(src, srcPos + litLen - 32));
-                LONG_LE.set(dst, dstPos + litLen - 24, (long) LONG_LE.get(src, srcPos + litLen - 24));
-                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
-                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
-            } else if (litLen >= 16) {
-                LONG_LE.set(dst, dstPos,     (long) LONG_LE.get(src, srcPos));
-                LONG_LE.set(dst, dstPos + 8, (long) LONG_LE.get(src, srcPos + 8));
-                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
-                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
-            } else if (litLen >= 8) {
-                LONG_LE.set(dst, dstPos,                 (long) LONG_LE.get(src, srcPos));
-                LONG_LE.set(dst, dstPos + litLen - 8, (long) LONG_LE.get(src, srcPos + litLen - 8));
-            } else {
-                if (litLen >= 4) {
-                    INT_LE.set(dst, dstPos,              (int) INT_LE.get(src, srcPos));
-                    INT_LE.set(dst, dstPos + litLen - 4, (int) INT_LE.get(src, srcPos + litLen - 4));
-                } else {
-                    for (int i = 0; i < litLen; i++) dst[dstPos + i] = src[srcPos + i];
-                }
-            }
-        } else {
-            System.arraycopy(src, srcPos, dst, dstPos, litLen);
-        }
+        System.arraycopy(src, srcPos, dst, dstPos, litLen);
         return dstPos + litLen;
     }
 
