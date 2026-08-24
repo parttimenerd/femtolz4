@@ -126,9 +126,13 @@ public final class CorpusBench {
         byte[] compressed = Arrays.copyOf(dst, compLen);
         byte[] restored = new byte[src.length];
 
-        Timing ct = benchmark(() -> compressYawkat(src, dst, comp), src.length);
-        emit("compress", name, src.length, maxChain, label, ct,
-                (double) src.length / compLen, compLen);
+        // Skip compress row for incompressible data: yawkat-fast exits early on
+        // random input, producing a meaningless throughput number.
+        if (compLen < src.length) {
+            Timing ct = benchmark(() -> compressYawkat(src, dst, comp), src.length);
+            emit("compress", name, src.length, maxChain, label, ct,
+                    (double) src.length / compLen, compLen);
+        }
 
         Timing dt = benchmark(() -> decompressYawkat(compressed, src.length, restored, decomp), src.length);
         emit("decompress", name, src.length, maxChain, label, dt,

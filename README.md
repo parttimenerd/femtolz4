@@ -363,7 +363,7 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 | femto-hc               |          7002 |           66636 | 1,00x |
 | femto-java-fast        |          3814 |           55882 | 1,00x |
 | femto-java             |          6786 |           56698 | 1,00x |
-| yawkat-fast            | **46430**[^earlyexit] |           57158 | 1,00x |
+| yawkat-fast            |               |           57158 | 1,00x |
 | yawkat-hc              |            51 |            3700 | 1,00x |
 
 ### mixed-20m.bin (21 MB)
@@ -377,7 +377,6 @@ Run `./benchmark.sh` to regenerate with numbers from your own machine.
 | yawkat-fast            |          3027 |            4538 | 1,94x |
 | yawkat-hc              |           117 |            4558 | 1,98x |
 
-[^earlyexit]: yawkat-fast on incompressible data exits early after a short scan — not a real compression speed.
 <!-- BENCHMARK:END -->
 
 ## License

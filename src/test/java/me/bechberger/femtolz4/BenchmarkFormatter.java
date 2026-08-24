@@ -78,7 +78,6 @@ public final class BenchmarkFormatter {
     static String formatCorpus(String raw) {
         Map<CorpusKey, CorpusRow> data = new LinkedHashMap<>();
         Map<String, Long> sizes = new LinkedHashMap<>();
-        Set<String> footnoteKeys = new LinkedHashSet<>();
 
         for (String line : raw.lines().toList()) {
             if (!line.startsWith("CSV,")) continue;
@@ -118,7 +117,7 @@ public final class BenchmarkFormatter {
             String corpus = row.key().corpus();
             if (!corpus.equals(curCorpus)) {
                 if (curCorpus != null) {
-                    sb.append(renderCorpusSection(curCorpus, sizes.get(curCorpus), sectionRows, footnoteKeys));
+                    sb.append(renderCorpusSection(curCorpus, sizes.get(curCorpus), sectionRows));
                     sectionRows.clear();
                 }
                 curCorpus = corpus;
@@ -126,18 +125,13 @@ public final class BenchmarkFormatter {
             sectionRows.add(row);
         }
         if (curCorpus != null) {
-            sb.append(renderCorpusSection(curCorpus, sizes.get(curCorpus), sectionRows, footnoteKeys));
+            sb.append(renderCorpusSection(curCorpus, sizes.get(curCorpus), sectionRows));
         }
 
-        if (!footnoteKeys.isEmpty()) {
-            sb.append("\n");
-            for (String fn : footnoteKeys) sb.append(fn).append("\n");
-        }
         return sb.toString();
     }
 
-    static String renderCorpusSection(String corpus, long size, List<CorpusRow> rows,
-                                      Set<String> footnoteKeys) {
+    static String renderCorpusSection(String corpus, long size, List<CorpusRow> rows) {
         double maxC = rows.stream().mapToDouble(r -> r.comp()).filter(v -> v >= 0).max().orElse(0);
         double maxD = rows.stream().mapToDouble(r -> r.decomp()).filter(v -> v >= 0).max().orElse(0);
 
@@ -149,11 +143,7 @@ public final class BenchmarkFormatter {
 
         for (CorpusRow r : rows) {
             String label = corpusLabel(r.key());
-            boolean isYawkatFastRandom = label.equals("yawkat-fast") && corpus.contains("random");
-            String footnote = isYawkatFastRandom ? "[^earlyexit]" : "";
-            if (isYawkatFastRandom) footnoteKeys.add(
-                "[^earlyexit]: yawkat-fast on incompressible data exits early after a short scan — not a real compression speed.");
-            String cs = r.comp() >= 0 ? fmtNum(r.comp(), r.comp() == maxC) + footnote : "-";
+            String cs = r.comp() >= 0 ? fmtNum(r.comp(), r.comp() == maxC) : "-";
             String ds = r.decomp() >= 0 ? fmtNum(r.decomp(), r.decomp() == maxD) : "-";
             String rat = String.format("%.2fx", r.ratio());
             sb.append(String.format("| %-22s | %13s | %15s | %5s |\n", label, cs, ds, rat));
