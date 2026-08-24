@@ -156,15 +156,8 @@ Frame feature support:
 [lz4-java](https://github.com/lz4/lz4-java) (and its fork
 [yawkat/lz4-java](https://github.com/yawkat/lz4-java)) inspired femtolz4.
 lz4-java covers more platforms and has a longer track record. femtolz4 trades
-breadth for a much smaller, simpler codebase.
-
-| | lz4-java |    femtolz4     |
-| --- | :---: |:---------------:|
-| JAR size | ~876 KB |     ~50 KB      |
-| Lines of Java source | ~10 000 |     ~2 000      |
-| Lines of C source | ~2 000 |      ~850       |
-| Platforms with native acceleration | 7 | 2 |
-| Dependencies at runtime | none |      none       |
+breadth for a much smaller, simpler codebase that doesn't depend on the lz4 library,
+with a 50KB JAR (vs ~870KB for lz4-java).
 
 The `LZ4.Compressor` and `LZ4.Decompressor` interfaces are intentionally
 compatible with lz4-java's `LZ4Compressor` and `LZ4FastDecompressor`, so
