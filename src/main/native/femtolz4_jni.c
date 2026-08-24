@@ -134,51 +134,35 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
             /* Run of one repeated byte: fill is fastest. */
             memset(dst + op, dst[ms], (size_t)match_len);
         } else if (offset >= 8) {
-            /* Lockstep copy: src advances in tandem with dst.  After offset steps
-               src reaches the start of the written output and begins reading back
-               the established pattern — correct for any offset >= 8. */
+            /* Partial overlap but stride >= 8: lockstep copy stays ahead of reads. */
             const uint8_t *s = dst + ms;
             uint8_t *d = dst + op;
             int64_t rem = match_len;
-            while (rem >= 16) {
-                __builtin_memcpy(d,     s,     8);
-                __builtin_memcpy(d + 8, s + 8, 8);
-                d += 16; s += 16; rem -= 16;
-            }
             while (rem >= 8) { __builtin_memcpy(d, s, 8); d += 8; s += 8; rem -= 8; }
             while (rem > 0) { *d++ = *s++; rem--; }
         } else {
-            /* Overlapping match (offset < match_len, 2 <= offset <= 7):
-               Prime an 8-byte tile by doubling, then blast forward in 8-byte strides
-               reading from the just-written output. */
+            /* Overlapping match (2 <= offset <= 7): prime an 8-byte tile by doubling,
+               then blast forward in 8-byte strides reading from d+c-period. */
             uint8_t *d  = dst + op;
             int64_t rem = match_len;
             int64_t c   = 0;
 
-            /* Prime: copy the first `offset` bytes from source. */
             __builtin_memcpy(d, dst + ms, (size_t)offset);
             c = offset;
 
-            /* Double until c >= 8 or we'd exceed rem. */
             while (c < 8 && c + c <= rem) {
                 __builtin_memcpy(d + c, d, (size_t)c);
                 c += c;
             }
-            /* Extend to 8 if not there yet (and rem allows). */
-            if (c < 8 && rem >= 8) {
-                __builtin_memcpy(d + c, d, (size_t)(8 - c));
-                c = 8;
-            }
 
-            /* Blast: 8-byte copies reading from the period-aligned tile. */
+            int64_t period = c;
             while (c + 8 <= rem) {
-                __builtin_memcpy(d + c, d + c - 8, 8);
+                __builtin_memcpy(d + c, d + c - period, 8);
                 c += 8;
             }
 
-            /* Tail: remaining < 8 bytes. */
             if (c < rem)
-                __builtin_memcpy(d + c, d, (size_t)(rem - c));
+                __builtin_memcpy(d + c, d + c - period, (size_t)(rem - c));
         }
         op += (int)match_len;
     }
@@ -191,7 +175,10 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
  * throw UnsatisfiedLinkError, and NativeLZ4.AVAILABLE stays false so the
  * Java fallback is used instead of crashing with SIGILL.
  *
- * On x86-64 (amd64) we require: SSE2, AVX2, FMA, BMI1, BMI2, POPCNT.
+ * On x86-64 (amd64) we require: SSE2, AVX2.
+ * Note: FMA/BMI1/BMI2/POPCNT are NOT required — neither the compressor nor the
+ * decompressor uses floating-point FMA, bit-manipulation, or population-count
+ * instructions. Requiring them would unnecessarily reject CPUs that have AVX2.
  */
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 {
@@ -200,12 +187,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
     unsigned int eax, ebx, ecx, edx;
 
-    /* ── Leaf 1: SSE2, POPCNT, FMA, XSAVE ── */
+    /* ── Leaf 1: SSE2, XSAVE (needed for OS AVX state management) ── */
     __asm__ volatile("cpuid" : "=a"(eax),"=b"(ebx),"=c"(ecx),"=d"(edx)
                              : "a"(1), "c"(0));
     if (!(edx & (1u << 26))) return JNI_ERR;  /* SSE2 (EDX bit 26) */
-    if (!(ecx & (1u << 23))) return JNI_ERR;  /* POPCNT (ECX bit 23) */
-    if (!(ecx & (1u << 12))) return JNI_ERR;  /* FMA (ECX bit 12) */
     if (!(ecx & (1u << 27))) return JNI_ERR;  /* XSAVE/XRESTORE (ECX bit 27) — needed for AVX2 */
 
     /* ── OS must have enabled YMM state (XCR0 bits 2:1) ── */
@@ -213,12 +198,10 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
     __asm__ volatile("xgetbv" : "=a"(xcr0_lo) : "c"(0) : "edx");
     if ((xcr0_lo & 0x6u) != 0x6u) return JNI_ERR;
 
-    /* ── Leaf 7 sub-leaf 0: AVX2, BMI1, BMI2 ── */
+    /* ── Leaf 7 sub-leaf 0: AVX2 ── */
     __asm__ volatile("cpuid" : "=a"(eax),"=b"(ebx),"=c"(ecx),"=d"(edx)
                              : "a"(7), "c"(0));
-    if (!(ebx & (1u <<  3))) return JNI_ERR;  /* BMI1 (EBX bit 3) */
     if (!(ebx & (1u <<  5))) return JNI_ERR;  /* AVX2 (EBX bit 5) */
-    if (!(ebx & (1u <<  8))) return JNI_ERR;  /* BMI2 (EBX bit 8) */
 
     (void)eax; (void)ecx; (void)edx;
 #endif

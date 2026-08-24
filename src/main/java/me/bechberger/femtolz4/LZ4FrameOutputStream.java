@@ -18,7 +18,7 @@ import java.io.OutputStream;
  * and any spec-compliant LZ4 frame decoder.
  * This stream intentionally writes block-independent frames only; block-dependent
  * encoding is not implemented to keep the encoder simple.
- * The default constructor uses 1 MiB blocks and the fastest compression level.
+ * The default constructor uses 4 MiB blocks and the fastest compression level.
  *
  * <p>The public compression knob is {@code level} from {@value #MIN_LEVEL} to
  * {@value #MAX_LEVEL}. Higher levels spend more effort searching for matches,
@@ -31,7 +31,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
     private static final int[] BLOCK_SIZES = {64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024};
     private static final int[] LEVEL_TO_MAX_CHAIN = {1, 2, 4, 6, 8, 12, 16, 32, 64};
 
-    /** Default block size: 1 MiB. */
+    /** Default block size: 4 MiB. */
     public static final int DEFAULT_BLOCK_SIZE = 4 << 20;
 
     /** Minimum public compression level. */
@@ -88,7 +88,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
         this(out, DEFAULT_BLOCK_SIZE, level);
     }
 
-    /** Wraps {@code out} with 1 MiB blocks and fastest compression. */
+    /** Wraps {@code out} with 4 MiB blocks and fastest compression. */
     public LZ4FrameOutputStream(OutputStream out) {
         this(out, DEFAULT_BLOCK_SIZE, LEVEL_FAST);
     }

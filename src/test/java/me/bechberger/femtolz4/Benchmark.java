@@ -1,6 +1,7 @@
 package me.bechberger.femtolz4;
 
 import net.jpountz.lz4.LZ4Factory;
+import net.jpountz.xxhash.XXHashFactory;
 
 import java.io.*;
 import java.nio.file.*;
@@ -82,27 +83,36 @@ public class Benchmark {
 
     static LZ4Factory yawkNative;
     static LZ4Factory yawkJava;
+    static XXHashFactory xxNative;
+    static XXHashFactory xxJava;
     static {
-        try { yawkNative = LZ4Factory.nativeInstance(); }
-        catch (Throwable t) { yawkNative = null; System.err.println("yawkat native unavail: " + t.getMessage()); }
-        yawkJava = LZ4Factory.safeInstance();
+        try { yawkNative = LZ4Factory.fastestInstance(); xxNative = XXHashFactory.fastestInstance(); }
+        catch (Throwable t) { yawkNative = null; xxNative = null; System.err.println("yawkat native unavail: " + t.getMessage()); }
+        yawkJava = LZ4Factory.fastestJavaInstance();
+        xxJava   = XXHashFactory.fastestJavaInstance();
     }
 
-    static Impl yawkFrameImpl(LZ4Factory f, String label) {
-        if (f == null) return null;
+    static Impl yawkFrameImpl(LZ4Factory lz4f, XXHashFactory xxf, String label) {
+        if (lz4f == null) return null;
         return new Impl() {
             public String name() { return label; }
             public byte[] compress(byte[] src) throws IOException {
                 ByteArrayOutputStream baos = new ByteArrayOutputStream(src.length / 2 + 256);
                 try (net.jpountz.lz4.LZ4FrameOutputStream out =
-                         new net.jpountz.lz4.LZ4FrameOutputStream(baos)) {
+                         new net.jpountz.lz4.LZ4FrameOutputStream(baos,
+                             net.jpountz.lz4.LZ4FrameOutputStream.BLOCKSIZE.SIZE_4MB,
+                             -1L, lz4f.fastCompressor(), xxf.hash32(),
+                             net.jpountz.lz4.LZ4FrameOutputStream.FLG.Bits.BLOCK_INDEPENDENCE)) {
                     out.write(src);
                 }
                 return baos.toByteArray();
             }
             public byte[] decompress(byte[] comp, int originalLen) throws IOException {
                 byte[] dst = new byte[originalLen];
-                try (LZ4FrameInputStream in = new LZ4FrameInputStream(new ByteArrayInputStream(comp))) {
+                try (net.jpountz.lz4.LZ4FrameInputStream in =
+                         new net.jpountz.lz4.LZ4FrameInputStream(
+                             new ByteArrayInputStream(comp),
+                             lz4f.safeDecompressor(), xxf.hash32())) {
                     int off = 0, rem = originalLen;
                     while (rem > 0) {
                         int n = in.read(dst, off, rem);
@@ -122,9 +132,9 @@ public class Benchmark {
         List<Impl> impls = new ArrayList<>();
         if (!javaOnly) impls.addAll(Arrays.asList(FEMTO_FAST, FEMTO_HC));
         impls.addAll(Arrays.asList(FEMTO_JAVA_FAST, FEMTO_JAVA, FEMTO_JAVA_HC));
-        Impl yawkNativeImpl = javaOnly ? null : yawkFrameImpl(yawkNative, "yawkat-native");
+        Impl yawkNativeImpl = javaOnly ? null : yawkFrameImpl(yawkNative, xxNative, "yawkat-native");
         if (yawkNativeImpl != null) impls.add(yawkNativeImpl);
-        Impl yawkJavaImpl = yawkFrameImpl(yawkJava, "yawkat-java");
+        Impl yawkJavaImpl = yawkFrameImpl(yawkJava, xxJava, "yawkat-java");
         if (yawkJavaImpl != null) impls.add(yawkJavaImpl);
 
         System.out.printf("native available: %s%n%n", LZ4.isNativeAvailable());

@@ -51,7 +51,7 @@ public final class LZ4FrameInputStream extends InputStream {
      */
     public LZ4FrameInputStream(InputStream in) throws IOException {
         this.in = in;
-        readFrameHeader(true);
+        readFrameHeader();
     }
 
     @Override
@@ -179,13 +179,11 @@ public final class LZ4FrameInputStream extends InputStream {
         return true;
     }
 
-    private void readFrameHeader(boolean required) throws IOException {
+    private void readFrameHeader() throws IOException {
         while (true) {
             int b0 = in.read();
             if (b0 < 0) {
-                if (required) throw new LZ4Exception("empty stream — no LZ4 frame");
-                eof = true;
-                return;
+                throw new LZ4Exception("empty stream — no LZ4 frame");
             }
             int magic = b0 | (readByte() << 8) | (readByte() << 16) | (readByte() << 24);
             if (magic == MAGIC) {

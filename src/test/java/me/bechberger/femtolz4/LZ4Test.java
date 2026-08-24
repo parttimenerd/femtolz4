@@ -227,16 +227,16 @@ class LZ4Test {
 
     @Test void frameHeaderIsBySystemLz4Compatible() throws IOException {
         // Verify the frame header bytes match the spec exactly
-        // magic=0x184D2204, FLG=0x60, BD=0x60 (1MB), HC=verified
+        // magic=0x184D2204, FLG=0x60, BD=0x70 (4MB default), HC=verified
         byte[] compressed = frameCompress("test".getBytes(StandardCharsets.UTF_8));
         assertEquals((byte) 0x04, compressed[0]);
         assertEquals((byte) 0x22, compressed[1]);
         assertEquals((byte) 0x4D, compressed[2]);
         assertEquals((byte) 0x18, compressed[3]);
         assertEquals((byte) 0x60, compressed[4]); // FLG
-        assertEquals((byte) 0x60, compressed[5]); // BD = 1MB
+        assertEquals((byte) 0x70, compressed[5]); // BD = 4MB (DEFAULT_BLOCK_SIZE)
         // HC = (xxhash32(FLG‖BD) >> 8) & 0xFF
-        byte[] hcInput = {0x60, 0x60};
+        byte[] hcInput = {0x60, 0x70};
         int expectedHC = (XXHash32.hash(hcInput, 0, 2) >> 8) & 0xFF;
         assertEquals((byte) expectedHC, compressed[6]);
     }
@@ -247,7 +247,7 @@ class LZ4Test {
             lz4.write("test".getBytes(StandardCharsets.UTF_8));
         }
         byte[] compressed = baos.toByteArray();
-        assertEquals((byte) 0x60, compressed[5]); // BD = 1MB default block size
+        assertEquals((byte) 0x70, compressed[5]); // BD = 4MB default block size
     }
 
     @Test void frameEndsWithEndMark() throws IOException {

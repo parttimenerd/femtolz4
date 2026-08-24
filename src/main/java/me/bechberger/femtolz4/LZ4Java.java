@@ -21,6 +21,8 @@ public final class LZ4Java {
     private static final int HASH_SIZE       = 1 << HASH_BITS;
     private static final int MIN_MATCH       = 4;
     private static final int PADDING         = 5;
+    /* LZ4 spec: last match must START >= MFLIMIT bytes before end of input. */
+    private static final int MFLIMIT         = 12;
     private static final int NIL             = Integer.MIN_VALUE;
 
     /* 12-bit fast tables: long[4096] storing (v4<<32|pos) (32 KB).
@@ -160,7 +162,7 @@ public final class LZ4Java {
         int pos       = srcOff;
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
-        int safeMain  = safeEnd - 1;
+        int safeMain  = srcEnd - MFLIMIT;       /* last match start ≤ srcEnd-MFLIMIT (spec) */
         int missBytes = 0;
         int skipCtr   = 2 << 6;
 
@@ -271,9 +273,9 @@ public final class LZ4Java {
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
-                // If lazy probed but lost, pos+1 was already inserted; start at pos+3
+                // If lazy probed but lost, pos+1 was already inserted; start at pos+2
                 // to avoid reinserting it (which can create a self-link in the chain).
-                int insertStart = pos + 1 + (lazyProbed ? 2 : 0);
+                int insertStart = pos + 1 + (lazyProbed ? 1 : 0);
                 for (int ip = insertStart; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
@@ -310,7 +312,7 @@ public final class LZ4Java {
         int pos       = srcOff;
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
-        int safeMain  = safeEnd - 1;
+        int safeMain  = srcEnd - MFLIMIT;       /* last match start ≤ srcEnd-MFLIMIT (spec) */
         int missBytes = 0;
         int skipCtr   = 2 << 6;
 
@@ -421,7 +423,7 @@ public final class LZ4Java {
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd   = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
-                int insertStart = pos + 1 + (lazyProbed ? 2 : 0);
+                int insertStart = pos + 1 + (lazyProbed ? 1 : 0);
                 for (int ip = insertStart; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
@@ -458,115 +460,113 @@ public final class LZ4Java {
         int pos       = srcOff;
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
-        int safeEnd2  = safeEnd - 1;
+        int safeEnd2  = srcEnd - MFLIMIT + 1;   /* pos < safeEnd2 ⟹ pos ≤ srcEnd-MFLIMIT (spec) */
         int missBytes = 0;
         int skipCtr   = 2 << 6;
 
-        if (pos < safeEnd2) {
-            int v4 = (int) INT_LE.get(src, pos);
-            int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+        int v4 = (pos < safeEnd2) ? (int) INT_LE.get(src, pos) : 0;
+        int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-            outer:
-            while (pos < safeEnd2) {
-                int bi = h << 1;
+        outer:
+        while (pos < safeEnd2) {
+            int bi = h << 1;
 
-                long s0 = head[bi], s1 = head[bi + 1];
-                head[bi + 1] = s0;
-                head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+            long s0 = head[bi], s1 = head[bi + 1];
+            head[bi + 1] = s0;
+            head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
-                /* Speculatively compute pos+1 hash and load its bucket */
-                int v4_1 = (int) INT_LE.get(src, pos + 1);
-                int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+            /* Speculatively compute pos+1 hash and load its bucket */
+            int v4_1 = (int) INT_LE.get(src, pos + 1);
+            int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-                int matchSv = -1, matchLen = 0;
-                int sv0 = (int) s0;
-                if ((pos - sv0) < WINDOW_SIZE && (int)(s0 >>> 32) == v4) {
-                    int len = extendMatch(src, sv0, pos, safeEnd - pos);
-                    if (len >= MIN_MATCH) { matchSv = sv0; matchLen = len; }
+            int matchSv = -1, matchLen = 0;
+            int sv0 = (int) s0;
+            if ((pos - sv0) < WINDOW_SIZE && (int)(s0 >>> 32) == v4) {
+                int len = extendMatch(src, sv0, pos, safeEnd - pos);
+                if (len >= MIN_MATCH) { matchSv = sv0; matchLen = len; }
+            }
+            int sv1 = (int) s1;
+            if (sv1 != sv0 && (pos - sv1) < WINDOW_SIZE && (int)(s1 >>> 32) == v4) {
+                if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
+                    int len = extendMatch(src, sv1, pos, safeEnd - pos);
+                    if (len > matchLen) { matchSv = sv1; matchLen = len; }
                 }
-                int sv1 = (int) s1;
-                if (sv1 != sv0 && (pos - sv1) < WINDOW_SIZE && (int)(s1 >>> 32) == v4) {
-                    if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
-                        int len = extendMatch(src, sv1, pos, safeEnd - pos);
-                        if (len > matchLen) { matchSv = sv1; matchLen = len; }
-                    }
-                }
+            }
 
-                if (matchLen >= MIN_MATCH) {
-                    missBytes = 0;
-                    skipCtr   = 2 << 6;
-                    int litLen     = pos - litStart;
-                    int matchExtra = matchLen - MIN_MATCH;
-                    int matchDist  = pos - matchSv;
-                    dst[op++] = token(litLen, matchExtra);
-                    if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                    op = copyLiterals(src, litStart, dst, op, litLen);
-                    dst[op++] = (byte) matchDist;
-                    dst[op++] = (byte) (matchDist >>> 8);
-                    if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
-                    litStart = pos + matchLen;
-                    pos = litStart;
-                    if (pos >= safeEnd2) break;
-                    v4 = (int) INT_LE.get(src, pos);
-                    h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                    continue;
-                }
-
-                int bi1 = h1 << 1;
-                long ss0 = head[bi1], ss1 = head[bi1 + 1];
-                head[bi1 + 1] = ss0;
-                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
-                pos++;
-                if (pos >= safeEnd2) { pos = srcEnd; break; }
-
-                matchSv = -1; matchLen = 0;
-                int ssv0 = (int) ss0;
-                if ((pos - ssv0) < WINDOW_SIZE && (int)(ss0 >>> 32) == v4_1) {
-                    int len = extendMatch(src, ssv0, pos, safeEnd - pos);
-                    if (len >= MIN_MATCH) { matchSv = ssv0; matchLen = len; }
-                }
-                int ssv1 = (int) ss1;
-                if (ssv1 != ssv0 && (pos - ssv1) < WINDOW_SIZE && (int)(ss1 >>> 32) == v4_1) {
-                    if (matchLen == 0 || src[ssv1 + matchLen] == src[pos + matchLen]) {
-                        int len = extendMatch(src, ssv1, pos, safeEnd - pos);
-                        if (len > matchLen) { matchSv = ssv1; matchLen = len; }
-                    }
-                }
-
-                if (matchLen >= MIN_MATCH) {
-                    missBytes = 0;
-                    skipCtr   = 2 << 6;
-                    int litLen     = pos - litStart;
-                    int matchExtra = matchLen - MIN_MATCH;
-                    int matchDist  = pos - matchSv;
-                    dst[op++] = token(litLen, matchExtra);
-                    if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                    op = copyLiterals(src, litStart, dst, op, litLen);
-                    dst[op++] = (byte) matchDist;
-                    dst[op++] = (byte) (matchDist >>> 8);
-                    if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
-                    litStart = pos + matchLen;
-                    pos = litStart;
-                    if (pos >= safeEnd2) break;
-                    v4 = (int) INT_LE.get(src, pos);
-                    h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                    continue;
-                }
-
-                /* Both pos and pos+1 missed — apply adaptive skip. */
-                if (missBytes < 128) {
-                    missBytes += 2;
-                    pos++;
-                } else {
-                    int step = (skipCtr >> 6) + 1;
-                    if (skipCtr < (17 << 6)) skipCtr++;
-                    missBytes += step;
-                    pos += step;
-                }
-                if (pos >= safeEnd2) { pos = srcEnd; break; }
+            if (matchLen >= MIN_MATCH) {
+                missBytes = 0;
+                skipCtr   = 2 << 6;
+                int litLen     = pos - litStart;
+                int matchExtra = matchLen - MIN_MATCH;
+                int matchDist  = pos - matchSv;
+                dst[op++] = token(litLen, matchExtra);
+                if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+                op = copyLiterals(src, litStart, dst, op, litLen);
+                dst[op++] = (byte) matchDist;
+                dst[op++] = (byte) (matchDist >>> 8);
+                if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
+                litStart = pos + matchLen;
+                pos = litStart;
+                if (pos >= safeEnd2) break;
                 v4 = (int) INT_LE.get(src, pos);
                 h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                continue;
             }
+
+            int bi1 = h1 << 1;
+            long ss0 = head[bi1], ss1 = head[bi1 + 1];
+            head[bi1 + 1] = ss0;
+            head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
+            pos++;
+            if (pos >= safeEnd2) { pos = srcEnd; break; }
+
+            matchSv = -1; matchLen = 0;
+            int ssv0 = (int) ss0;
+            if ((pos - ssv0) < WINDOW_SIZE && (int)(ss0 >>> 32) == v4_1) {
+                int len = extendMatch(src, ssv0, pos, safeEnd - pos);
+                if (len >= MIN_MATCH) { matchSv = ssv0; matchLen = len; }
+            }
+            int ssv1 = (int) ss1;
+            if (ssv1 != ssv0 && (pos - ssv1) < WINDOW_SIZE && (int)(ss1 >>> 32) == v4_1) {
+                if (matchLen == 0 || src[ssv1 + matchLen] == src[pos + matchLen]) {
+                    int len = extendMatch(src, ssv1, pos, safeEnd - pos);
+                    if (len > matchLen) { matchSv = ssv1; matchLen = len; }
+                }
+            }
+
+            if (matchLen >= MIN_MATCH) {
+                missBytes = 0;
+                skipCtr   = 2 << 6;
+                int litLen     = pos - litStart;
+                int matchExtra = matchLen - MIN_MATCH;
+                int matchDist  = pos - matchSv;
+                dst[op++] = token(litLen, matchExtra);
+                if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+                op = copyLiterals(src, litStart, dst, op, litLen);
+                dst[op++] = (byte) matchDist;
+                dst[op++] = (byte) (matchDist >>> 8);
+                if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
+                litStart = pos + matchLen;
+                pos = litStart;
+                if (pos >= safeEnd2) break;
+                v4 = (int) INT_LE.get(src, pos);
+                h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                continue;
+            }
+
+            /* Both pos and pos+1 missed — apply adaptive skip. */
+            if (missBytes < 128) {
+                missBytes += 2;
+                pos++;
+            } else {
+                int step = (skipCtr >> 6) + 1;
+                if (skipCtr < (17 << 6)) skipCtr++;
+                missBytes += step;
+                pos += step;
+            }
+            if (pos >= safeEnd2) { pos = srcEnd; break; }
+            v4 = (int) INT_LE.get(src, pos);
+            h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
         }
 
         int litLen = srcEnd - litStart;
@@ -592,93 +592,91 @@ public final class LZ4Java {
         int pos       = srcOff;
         int srcEnd    = srcOff + srcLen;
         int safeEnd   = srcEnd - PADDING;
-        int safeEnd2  = safeEnd - 1;
+        int safeEnd2  = srcEnd - MFLIMIT + 1;   /* pos < safeEnd2 ⟹ pos ≤ srcEnd-MFLIMIT (spec) */
         int missBytes = 0;
         int skipCtr   = 2 << 6;
 
-        if (pos < safeEnd2) {
-            int v4 = (int) INT_LE.get(src, pos);
-            int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+        int v4 = (pos < safeEnd2) ? (int) INT_LE.get(src, pos) : 0;
+        int h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-            while (pos < safeEnd2) {
-                long slot = head[h];
-                head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+        while (pos < safeEnd2) {
+            long slot = head[h];
+            head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
-                /* Speculatively load pos+1 slot while checking pos — hides second load latency. */
-                int v4_1 = (int) INT_LE.get(src, pos + 1);
-                int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                long slot1 = head[h1];
+            /* Speculatively load pos+1 slot while checking pos — hides second load latency. */
+            int v4_1 = (int) INT_LE.get(src, pos + 1);
+            int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+            long slot1 = head[h1];
 
-                int sv = (int) slot;
-                if ((pos - sv) < WINDOW_SIZE && (int)(slot >>> 32) == v4) {
-                    int maxMatch = safeEnd - pos;
-                    int len = extendMatch(src, sv, pos, maxMatch);
+            int sv = (int) slot;
+            if ((pos - sv) < WINDOW_SIZE && (int)(slot >>> 32) == v4) {
+                int maxMatch = safeEnd - pos;
+                int len = extendMatch(src, sv, pos, maxMatch);
 
-                    if (len >= MIN_MATCH) {
-                        missBytes = 0;
-                        skipCtr   = 2 << 6;
-                        int litLen     = pos - litStart;
-                        int matchExtra = len - MIN_MATCH;
-                        int matchDist  = pos - sv;
-                        dst[op++] = token(litLen, matchExtra);
-                        if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
-                        op = copyLiterals(src, litStart, dst, op, litLen);
-                        dst[op++] = (byte) matchDist;
-                        dst[op++] = (byte) (matchDist >>> 8);
-                        if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
-                        litStart = pos + len;
-                        pos = litStart;
-                        if (pos >= safeEnd2) break;
-                        v4 = (int) INT_LE.get(src, pos);
-                        h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                        continue;
-                    }
+                if (len >= MIN_MATCH) {
+                    missBytes = 0;
+                    skipCtr   = 2 << 6;
+                    int litLen     = pos - litStart;
+                    int matchExtra = len - MIN_MATCH;
+                    int matchDist  = pos - sv;
+                    dst[op++] = token(litLen, matchExtra);
+                    if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
+                    op = copyLiterals(src, litStart, dst, op, litLen);
+                    dst[op++] = (byte) matchDist;
+                    dst[op++] = (byte) (matchDist >>> 8);
+                    if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
+                    litStart = pos + len;
+                    pos = litStart;
+                    if (pos >= safeEnd2) break;
+                    v4 = (int) INT_LE.get(src, pos);
+                    h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                    continue;
                 }
-
-                pos++;
-                if (pos >= safeEnd2) { pos = srcEnd; break; }
-
-                head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
-
-                int sv1 = (int) slot1;
-                if ((pos - sv1) < WINDOW_SIZE && (int)(slot1 >>> 32) == v4_1) {
-                    int maxMatch1 = safeEnd - pos;
-                    int len1 = extendMatch(src, sv1, pos, maxMatch1);
-
-                    if (len1 >= MIN_MATCH) {
-                        missBytes = 0;
-                        skipCtr   = 2 << 6;
-                        int litLen1     = pos - litStart;
-                        int matchExtra1 = len1 - MIN_MATCH;
-                        int matchDist1  = pos - sv1;
-                        dst[op++] = token(litLen1, matchExtra1);
-                        if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
-                        op = copyLiterals(src, litStart, dst, op, litLen1);
-                        dst[op++] = (byte) matchDist1;
-                        dst[op++] = (byte) (matchDist1 >>> 8);
-                        if (matchExtra1 >= 15) op = writeOverflow(dst, op, matchExtra1 - 15);
-                        litStart = pos + len1;
-                        pos = litStart;
-                        if (pos >= safeEnd2) break;
-                        v4 = (int) INT_LE.get(src, pos);
-                        h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-                        continue;
-                    }
-                }
-
-                if (missBytes < 128) {
-                    missBytes += 2;
-                    pos++;
-                } else {
-                    int step = (skipCtr >> 6) + 1;
-                    if (skipCtr < (17 << 6)) skipCtr++;
-                    missBytes += step;
-                    pos += step;
-                }
-                if (pos >= safeEnd2) { pos = srcEnd; break; }
-                v4 = (int) INT_LE.get(src, pos);
-                h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
             }
+
+            pos++;
+            if (pos >= safeEnd2) { pos = srcEnd; break; }
+
+            head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
+
+            int sv1 = (int) slot1;
+            if ((pos - sv1) < WINDOW_SIZE && (int)(slot1 >>> 32) == v4_1) {
+                int maxMatch1 = safeEnd - pos;
+                int len1 = extendMatch(src, sv1, pos, maxMatch1);
+
+                if (len1 >= MIN_MATCH) {
+                    missBytes = 0;
+                    skipCtr   = 2 << 6;
+                    int litLen1     = pos - litStart;
+                    int matchExtra1 = len1 - MIN_MATCH;
+                    int matchDist1  = pos - sv1;
+                    dst[op++] = token(litLen1, matchExtra1);
+                    if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
+                    op = copyLiterals(src, litStart, dst, op, litLen1);
+                    dst[op++] = (byte) matchDist1;
+                    dst[op++] = (byte) (matchDist1 >>> 8);
+                    if (matchExtra1 >= 15) op = writeOverflow(dst, op, matchExtra1 - 15);
+                    litStart = pos + len1;
+                    pos = litStart;
+                    if (pos >= safeEnd2) break;
+                    v4 = (int) INT_LE.get(src, pos);
+                    h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+                    continue;
+                }
+            }
+
+            if (missBytes < 128) {
+                missBytes += 2;
+                pos++;
+            } else {
+                int step = (skipCtr >> 6) + 1;
+                if (skipCtr < (17 << 6)) skipCtr++;
+                missBytes += step;
+                pos += step;
+            }
+            if (pos >= safeEnd2) { pos = srcEnd; break; }
+            v4 = (int) INT_LE.get(src, pos);
+            h  = (v4 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
         }
 
         int litLen = srcEnd - litStart;
@@ -739,8 +737,6 @@ public final class LZ4Java {
                     } else if (iLitLen >= 4) {
                         INT_LE.set(dst, op,                (int) INT_LE.get(src, ip));
                         INT_LE.set(dst, op + iLitLen - 4,  (int) INT_LE.get(src, ip + iLitLen - 4));
-                    } else {
-                        for (int ci = 0; ci < iLitLen; ci++) dst[op + ci] = src[ip + ci];
                     }
                 } else {
                     System.arraycopy(src, ip, dst, op, iLitLen);
@@ -879,7 +875,9 @@ public final class LZ4Java {
             while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, src)); src += 8; d += 8; }
             while (d < end) { buf[d++] = buf[src++]; }
         } else {
-            /* Offset 3..7: prime an 8-byte tile, then blast forward in 8-byte strides. */
+            /* Offset 3..7: prime an offset-sized tile, double until ≥8 bytes primed,
+               then stride forward reading from d-c (c = primed block size, a multiple
+               of offset, so pattern alignment is preserved without out-of-bounds reads). */
             int d   = dst;
             int end = dst + len;
             for (int i = 0; i < offset; i++) buf[d + i] = buf[src + i];
@@ -887,7 +885,7 @@ public final class LZ4Java {
             while (c < 8 && c + c <= len) { System.arraycopy(buf, d, buf, d + c, c); c += c; }
             if (c < 8 && d + 8 <= end) { System.arraycopy(buf, d, buf, d + c, 8 - c); c = 8; }
             d += c;
-            while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, d - 8)); d += 8; }
+            while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, d - c)); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
         }
     }
