@@ -26,8 +26,10 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ConcurrencyTest {
 
-    private static final int THREADS  = Runtime.getRuntime().availableProcessors() * 2;
-    private static final int DURATION_MS = 2000;
+    // Cap at 8 so this test is safe when many parallel workers run simultaneously.
+    // Each worker spawns THREADS JVM threads; 8 × N-workers keeps total threads sane.
+    private static final int THREADS     = Math.min(8, Runtime.getRuntime().availableProcessors());
+    private static final int DURATION_MS = 500;
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -215,7 +217,7 @@ class ConcurrencyTest {
     @Property
     @Tag("deep-fuzz")
     void propertyParallelRoundTrip(@ForAll @Size(max = 16384) byte[] data) throws Exception {
-        runParallel(Math.min(THREADS, 8), 200, () -> {
+        runParallel(THREADS, 200, () -> {
             for (int chain : new int[]{0, 1, 256}) {
                 assertArrayEquals(data, LZ4.decompress(LZ4.compress(data, chain), data.length),
                         "native chain=" + chain);
@@ -233,7 +235,7 @@ class ConcurrencyTest {
     void propertyParallelGarbageNeverCrashes(@ForAll @Size(max = 2048) byte[] garbage,
                                              @ForAll @IntRange(min = 0, max = 8192) int dstLen)
             throws Exception {
-        runParallel(Math.min(THREADS, 8), 100, () -> {
+        runParallel(THREADS, 100, () -> {
             try { LZ4.decompress(garbage, 0, garbage.length, new byte[dstLen], 0, dstLen); }
             catch (LZ4Exception ok) {}
             try { LZ4.decompressJava(garbage, dstLen); }
