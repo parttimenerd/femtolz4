@@ -37,11 +37,15 @@
           Test suite selection (JUnit Platform tag filtering; applies to both
           JUnit Jupiter @Test and jqwik @Property, since jqwik's @Tag maps to
           the same platform tags):
-            mvn test                    -> fast suite (excludes "slow")
-            mvn test -Dtest.full=true   -> full suite (nothing excluded)
+            mvn test                       -> fast suite (excludes "slow" and "deep-fuzz")
+            mvn test -Dtest.full=true      -> full suite (nothing excluded)
+            mvn test -Pfuzz                -> deep-fuzz suite: 20× more jqwik tries,
+                                             includes "deep-fuzz" tests, excludes "slow"
         -->
         <test.full>false</test.full>
-        <test.excludedGroups>slow</test.excludedGroups>
+        <test.excludedGroups>slow,deep-fuzz</test.excludedGroups>
+        <!-- jqwik default tries — overridden to 10000 in the fuzz profile -->
+        <fuzz.tries.default>200</fuzz.tries.default>
     </properties>
 
     <dependencies>
@@ -66,6 +70,13 @@
     </dependencies>
 
     <build>
+        <testResources>
+            <testResource>
+                <directory>src/test/resources</directory>
+                <!-- enables ${fuzz.tries.default} substitution in junit-platform.properties -->
+                <filtering>true</filtering>
+            </testResource>
+        </testResources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -129,6 +140,21 @@
             </activation>
             <properties>
                 <test.excludedGroups></test.excludedGroups>
+            </properties>
+        </profile>
+
+        <!-- Activated by -Pfuzz: deep-fuzz mode.
+             Runs all fuzz tests (including deep-fuzz tag) with 50× more jqwik
+             tries than the normal suite.  Slow structural tests are still excluded
+             (they are not fuzz tests and would dominate the run time).
+               mvn test -Pfuzz
+               mvn test -Pfuzz -Dtest=YawkatFuzzTest   (single class)
+        -->
+        <profile>
+            <id>fuzz</id>
+            <properties>
+                <fuzz.tries.default>10000</fuzz.tries.default>
+                <test.excludedGroups>slow</test.excludedGroups>
             </properties>
         </profile>
     </profiles>
