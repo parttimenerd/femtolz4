@@ -64,6 +64,30 @@ class FuzzTest {
         assertArrayEquals(data, decompressed);
     }
 
+    @Property
+
+    void javaFemtoToYawkat(@ForAll @Size(min = 16, max = 65536) byte[] data,
+                           @ForAll("allChains") int chain) {
+        byte[] compressed = LZ4.compressJava(data, chain);
+        byte[] dst        = new byte[data.length];
+        YAWKAT_DEC.decompress(compressed, 0, dst, 0, data.length);
+        assertArrayEquals(data, dst);
+    }
+
+    @Property
+    @Tag("deep-fuzz")
+    void crossDecompressors(@ForAll @Size(max = 32768) byte[] data,
+                            @ForAll("allChains") int chain) {
+        // Java compress → native decompress
+        byte[] jcomp = LZ4.compressJava(data, chain);
+        assertArrayEquals(data, LZ4.decompress(jcomp, data.length),
+                "java-compress/native-decompress chain=" + chain);
+        // Native compress → Java decompress
+        byte[] ncomp = LZ4.compress(data, chain);
+        assertArrayEquals(data, LZ4.decompressJava(ncomp, data.length),
+                "native-compress/java-decompress chain=" + chain);
+    }
+
     // ── Cross-compat: femtolz4 → yawkat ──────────────────────────────────────
 
     @Property
@@ -98,7 +122,8 @@ class FuzzTest {
         byte[] tmp  = new byte[YAWKAT_ENC.maxCompressedLength(data.length)];
         int    n    = YAWKAT_ENC.compress(data, 0, data.length, tmp, 0, tmp.length);
         byte[] comp = Arrays.copyOf(tmp, n);
-        assertArrayEquals(data, LZ4.decompress(comp, data.length));
+        assertArrayEquals(data, LZ4.decompress(comp, data.length), "native decompressor");
+        assertArrayEquals(data, LZ4.decompressJava(comp, data.length), "java decompressor");
     }
 
     // ── All chain depths produce valid round-trip output ─────────────────────
@@ -107,9 +132,16 @@ class FuzzTest {
     @Tag("deep-fuzz")
     void allChainDepths(@ForAll @Size(max = 16384) byte[] data) {
         for (int chain : new int[]{0, 1, 2, 4, 8, 16, 64, 256}) {
-            byte[] compressed   = LZ4.compress(data, chain);
-            byte[] decompressed = LZ4.decompress(compressed, data.length);
-            assertArrayEquals(data, decompressed, "round-trip failed at chain=" + chain);
+            byte[] ncomp = LZ4.compress(data, chain);
+            assertArrayEquals(data, LZ4.decompress(ncomp, data.length),
+                    "native round-trip chain=" + chain);
+            assertArrayEquals(data, LZ4.decompressJava(ncomp, data.length),
+                    "native-compress/java-decompress chain=" + chain);
+            byte[] jcomp = LZ4.compressJava(data, chain);
+            assertArrayEquals(data, LZ4.decompressJava(jcomp, data.length),
+                    "java round-trip chain=" + chain);
+            assertArrayEquals(data, LZ4.decompress(jcomp, data.length),
+                    "java-compress/native-decompress chain=" + chain);
         }
     }
 

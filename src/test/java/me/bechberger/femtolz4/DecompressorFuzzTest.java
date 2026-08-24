@@ -151,17 +151,26 @@ class DecompressorFuzzTest {
      */
     @Property
     @Tag("deep-fuzz")
-    void javaAndNativeAgreeOnValidInput(@ForAll @Size(max = 32768) byte[] src) {
+    void javaAndNativeAgreeOnValidInput(@ForAll @Size(max = 32768) byte[] src,
+                                        @ForAll("allChains") int chain) {
         if (!LZ4.isNativeAvailable()) return;
+        // yawkat-compressed
         byte[] tmp = new byte[YAWKAT.fastCompressor().maxCompressedLength(src.length)];
         int n = YAWKAT.fastCompressor().compress(src, 0, src.length, tmp, 0, tmp.length);
-        byte[] comp = Arrays.copyOf(tmp, n);
+        byte[] ycomp = Arrays.copyOf(tmp, n);
+        assertJavaAndNativeAgree(src, ycomp, "yawkat");
+        // femto-java-compressed
+        assertJavaAndNativeAgree(src, LZ4.compressJava(src, chain), "java chain=" + chain);
+        // femto-native-compressed
+        assertJavaAndNativeAgree(src, LZ4.compress(src, chain), "native chain=" + chain);
+    }
 
+    private static void assertJavaAndNativeAgree(byte[] src, byte[] comp, String label) {
         byte[] dst1 = LZ4Java.decompressJava(comp, src.length);
         byte[] dst2 = LZ4.decompress(comp, src.length);
-        assertArrayEquals(src, dst1, "java wrong");
-        assertArrayEquals(src, dst2, "native wrong");
-        assertArrayEquals(dst1, dst2, "java/native disagree");
+        assertArrayEquals(src, dst1, label + ": java wrong");
+        assertArrayEquals(src, dst2, label + ": native wrong");
+        assertArrayEquals(dst1, dst2, label + ": java/native disagree");
     }
 
     // ── B. Bit-flip corruption: valid block + single-byte mutation ─────────────
