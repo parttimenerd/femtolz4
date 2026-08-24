@@ -23,19 +23,19 @@ public final class LZ4Java {
     private static final int PADDING         = 5;
     private static final int NIL             = Integer.MIN_VALUE;
 
-    /* 12-bit fast table: long[4096] packed as (value<<32|pos), sentinel = negative pos. */
+    /* 12-bit fast table: long[4096] packed as (value<<32 | epoch7<<24 | pos).
+       7 epoch bits in low word [30:24] (bit 31 kept zero to avoid sign extension),
+       24 pos bits in [23:0]. Arrays.fill fires at most once every 127 calls. */
     private static final int HASH_BITS_FAST  = 12;
     private static final int HASH_SIZE_FAST  = 1 << HASH_BITS_FAST;
-    private static final long FAST_SENTINEL  = 0x8080808080808080L;
 
     /* Thread-local tables — reused per call to avoid allocation. */
-    private static final ThreadLocal<long[]> TL_FAST_HEAD  = ThreadLocal.withInitial(() -> {
-        long[] t = new long[HASH_SIZE_FAST]; Arrays.fill(t, FAST_SENTINEL); return t;
-    });
+    private static final ThreadLocal<long[]> TL_FAST_HEAD  = ThreadLocal.withInitial(() -> new long[HASH_SIZE_FAST]);
+    private static final ThreadLocal<int[]>  TL_FAST_CTR   = ThreadLocal.withInitial(() -> new int[]{1});
+
     /* 2-way associative: two slots per bucket (LRU). Slightly better ratio than chain=1. */
-    private static final ThreadLocal<long[]> TL_FAST2_HEAD = ThreadLocal.withInitial(() -> {
-        long[] t = new long[HASH_SIZE_FAST * 2]; Arrays.fill(t, FAST_SENTINEL); return t;
-    });
+    private static final ThreadLocal<long[]> TL_FAST2_HEAD  = ThreadLocal.withInitial(() -> new long[HASH_SIZE_FAST * 2]);
+    private static final ThreadLocal<int[]>  TL_FAST2_CTR   = ThreadLocal.withInitial(() -> new int[]{1});
     /* Chain tables: head[] filled NIL before each block; tail[] only read from valid heads. */
     private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
     private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
@@ -450,8 +450,15 @@ public final class LZ4Java {
     private static int compressFast2Way(byte[] src, int srcOff, int srcLen,
                                         byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head   = TL_FAST2_HEAD.get();
-        Arrays.fill(head, FAST_SENTINEL);
+        long[] head  = TL_FAST2_HEAD.get();
+        int[]  ctr   = TL_FAST2_CTR.get();
+        int curEpoch = ctr[0];
+        if ((curEpoch & 0x7F) == 0) {
+            Arrays.fill(head, 0L);
+            curEpoch = 1;
+        }
+        ctr[0] = curEpoch + 1;
+        int epochBits = (curEpoch & 0x7F) << 24;
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -472,20 +479,20 @@ public final class LZ4Java {
 
                 long s0 = head[bi], s1 = head[bi + 1];
                 head[bi + 1] = s0;
-                head[bi]     = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+                head[bi]     = ((long) v4 << 32) | epochBits | (pos & 0x00FFFFFF);
 
                 /* Speculatively compute pos+1 hash */
                 int v4_1 = (int) INT_LE.get(src, pos + 1);
                 int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
 
-                int sv = (int) s0;
+                int sv = (int) s0 & 0x00FFFFFF;
                 int matchSv = -1, matchLen = 0;
-                if (sv > pos - WINDOW_SIZE & (int)(s0 >>> 32) == v4) {
+                if ((((int) s0 & 0x7F000000) == epochBits) & (sv > pos - WINDOW_SIZE) & ((int)(s0 >>> 32) == v4)) {
                     int len = extendMatch(src, sv, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = sv; matchLen = len; }
                 }
-                int sv1 = (int) s1;
-                if (sv1 != sv && sv1 > pos - WINDOW_SIZE & (int)(s1 >>> 32) == v4) {
+                int sv1 = (int) s1 & 0x00FFFFFF;
+                if ((sv1 != sv) & (((int) s1 & 0x7F000000) == epochBits) & (sv1 > pos - WINDOW_SIZE) & ((int)(s1 >>> 32) == v4)) {
                     if (matchLen == 0 || src[sv1 + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, sv1, pos, safeEnd - pos);
                         if (len > matchLen) { matchSv = sv1; matchLen = len; }
@@ -515,18 +522,18 @@ public final class LZ4Java {
                 int bi1 = h1 << 1;
                 long ss0 = head[bi1], ss1 = head[bi1 + 1];
                 head[bi1 + 1] = ss0;
-                head[bi1]     = ((long) v4_1 << 32) | ((pos + 1) & 0xFFFFFFFFL);
+                head[bi1]     = ((long) v4_1 << 32) | epochBits | ((pos + 1) & 0x00FFFFFF);
                 pos++;
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
-                int svA = (int) ss0;
+                int svA = (int) ss0 & 0x00FFFFFF;
                 matchSv = -1; matchLen = 0;
-                if (svA > pos - WINDOW_SIZE & (int)(ss0 >>> 32) == v4_1) {
+                if ((((int) ss0 & 0x7F000000) == epochBits) & (svA > pos - WINDOW_SIZE) & ((int)(ss0 >>> 32) == v4_1)) {
                     int len = extendMatch(src, svA, pos, safeEnd - pos);
                     if (len >= MIN_MATCH) { matchSv = svA; matchLen = len; }
                 }
-                int svB = (int) ss1;
-                if (svB != svA && svB > pos - WINDOW_SIZE & (int)(ss1 >>> 32) == v4_1) {
+                int svB = (int) ss1 & 0x00FFFFFF;
+                if ((svB != svA) & (((int) ss1 & 0x7F000000) == epochBits) & (svB > pos - WINDOW_SIZE) & ((int)(ss1 >>> 32) == v4_1)) {
                     if (matchLen == 0 || src[svB + matchLen] == src[pos + matchLen]) {
                         int len = extendMatch(src, svB, pos, safeEnd - pos);
                         if (len > matchLen) { matchSv = svB; matchLen = len; }
@@ -578,12 +585,21 @@ public final class LZ4Java {
         return op - dstOff;
     }
 
-    /* chain=1: single-slot hash table, packed (value<<32|pos) sentinel. */
+    /* chain=1: single-slot hash table, packed (value<<32|epoch7<<24|pos24).
+       7 epoch bits in low word [30:24], 24 pos bits in [23:0]. Arrays.fill fires at most
+       once every 127 calls (epoch wrap); essentially never in practice. */
     private static int compressFast(byte[] src, int srcOff, int srcLen,
                                     byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head = TL_FAST_HEAD.get();
-        Arrays.fill(head, FAST_SENTINEL);
+        long[] head  = TL_FAST_HEAD.get();
+        int[]  ctr   = TL_FAST_CTR.get();
+        int curEpoch = ctr[0];
+        if ((curEpoch & 0x7F) == 0) {
+            Arrays.fill(head, 0L);
+            curEpoch = 1;
+        }
+        ctr[0] = curEpoch + 1;
+        int epochBits = (curEpoch & 0x7F) << 24;
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -600,10 +616,10 @@ public final class LZ4Java {
 
             while (pos < safeEnd2) {
                 long slot = head[h];
-                head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
+                head[h] = ((long) v4 << 32) | epochBits | (pos & 0x00FFFFFF);
 
-                int sv = (int) slot;
-                if (sv > pos - WINDOW_SIZE & (int)(slot >>> 32) == v4) {
+                int sv = (int) slot & 0x00FFFFFF;
+                if ((((int) slot & 0x7F000000) == epochBits) & (sv > pos - WINDOW_SIZE) & ((int)(slot >>> 32) == v4)) {
                     int maxMatch = safeEnd - pos;
                     int len = extendMatch(src, sv, pos, maxMatch);
 
@@ -634,10 +650,10 @@ public final class LZ4Java {
                 if (pos >= safeEnd2) { pos = srcEnd; break; }
 
                 long slot1 = head[h1];
-                head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
+                head[h1] = ((long) v4_1 << 32) | epochBits | (pos & 0x00FFFFFF);
 
-                int sv1 = (int) slot1;
-                if (sv1 > pos - WINDOW_SIZE & (int)(slot1 >>> 32) == v4_1) {
+                int sv1 = (int) slot1 & 0x00FFFFFF;
+                if ((((int) slot1 & 0x7F000000) == epochBits) & (sv1 > pos - WINDOW_SIZE) & ((int)(slot1 >>> 32) == v4_1)) {
                     int maxMatch1 = safeEnd - pos;
                     int len1 = extendMatch(src, sv1, pos, maxMatch1);
 

@@ -116,12 +116,15 @@ public class Benchmark {
     // ── Main ──────────────────────────────────────────────────────────────────
 
     public static void main(String[] args) throws Exception {
-        List<Impl> impls = new ArrayList<>(Arrays.asList(
-                FEMTO_FAST, FEMTO, FEMTO_JAVA_FAST, FEMTO_JAVA, FEMTO_JAVA_HC));
-        Impl yn = yawkImpl(yawkNative, "yawkat-native");
-        Impl yj = yawkImpl(yawkJava,   "yawkat-java");
-        if (yn != null) impls.add(yn);
-        impls.add(yj);
+        boolean javaOnly = Boolean.getBoolean("bench.java.only");
+        List<Impl> impls = new ArrayList<>();
+        if (!javaOnly) impls.addAll(Arrays.asList(FEMTO_FAST, FEMTO));
+        impls.addAll(Arrays.asList(FEMTO_JAVA_FAST, FEMTO_JAVA, FEMTO_JAVA_HC));
+        if (!javaOnly) {
+            Impl yn = yawkImpl(yawkNative, "yawkat-native");
+            if (yn != null) impls.add(yn);
+        }
+        impls.add(yawkImpl(yawkJava, "yawkat-java"));
 
         System.out.printf("native available: %s%n%n", LZ4.isNativeAvailable());
         System.out.printf("%-22s  %8s  %8s  %6s%n", "impl", "comp MB/s", "dec MB/s", "ratio");
