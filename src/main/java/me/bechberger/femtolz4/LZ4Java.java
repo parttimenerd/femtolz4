@@ -779,12 +779,25 @@ public final class LZ4Java {
         return op - dstOff;
     }
 
-    /**
-     * Copy litLen bytes from src[srcPos] to dst[dstPos], returning dstPos+litLen.
-     * VARIANT A: System.arraycopy for all sizes.
-     */
     static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
-        System.arraycopy(src, srcPos, dst, dstPos, litLen);
+        if (litLen >= 16) {
+            if (litLen <= 32) {
+                LONG_LE.set(dst, dstPos,      (long) LONG_LE.get(src, srcPos));
+                LONG_LE.set(dst, dstPos + 8,  (long) LONG_LE.get(src, srcPos + 8));
+                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
+                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
+            } else {
+                System.arraycopy(src, srcPos, dst, dstPos, litLen);
+            }
+        } else if (litLen >= 8) {
+            LONG_LE.set(dst, dstPos,               (long) LONG_LE.get(src, srcPos));
+            LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
+        } else if (litLen >= 4) {
+            INT_LE.set(dst, dstPos,               (int) INT_LE.get(src, srcPos));
+            INT_LE.set(dst, dstPos + litLen - 4,  (int) INT_LE.get(src, srcPos + litLen - 4));
+        } else {
+            for (int i = 0; i < litLen; i++) dst[dstPos + i] = src[srcPos + i];
+        }
         return dstPos + litLen;
     }
 
