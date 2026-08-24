@@ -5,9 +5,6 @@
 
 #include "lz4.h"
 
-#ifdef __ARM_NEON
-#  include <arm_neon.h>
-#endif
 #ifdef __AVX2__
 #  include <immintrin.h>
 #endif
@@ -103,32 +100,13 @@ FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 /*
  * Extend a candidate match whose first MIN_MATCH bytes are already known to
  * be equal, returning the total match length (capped at max_match).  Uses
- * SIMD where available (NEON or AVX2, chosen at compile time per platform),
- * then 8-byte scalar steps, then a final byte-by-byte fragment.
+ * AVX2 32-byte steps then 16-byte SSE2 steps, then 8-byte scalar, then
+ * byte-by-byte for the tail.
  */
 FORCE_INLINE int lz4__extend_match(const uint8_t *src, int sv, int pos, int max_match)
 {
     int len = MIN_MATCH;
-#ifdef __ARM_NEON
-    while (len + 16 <= max_match) {
-        uint8x16_t sv16  = vld1q_u8(src + sv  + len);
-        uint8x16_t pos16 = vld1q_u8(src + pos + len);
-        uint8x16_t eq    = vceqq_u8(sv16, pos16);
-        uint32x4_t ne    = vreinterpretq_u32_u8(vmvnq_u8(eq));
-        uint32_t ne0 = vgetq_lane_u32(ne, 0), ne1 = vgetq_lane_u32(ne, 1);
-        uint32_t ne2 = vgetq_lane_u32(ne, 2), ne3 = vgetq_lane_u32(ne, 3);
-        if (ne0 | ne1 | ne2 | ne3) {
-            if      (ne0) len +=  0 + (__builtin_ctz(ne0) >> 3);
-            else if (ne1) len +=  4 + (__builtin_ctz(ne1) >> 3);
-            else if (ne2) len +=  8 + (__builtin_ctz(ne2) >> 3);
-            else          len += 12 + (__builtin_ctz(ne3) >> 3);
-            return len;
-        }
-        len += 16;
-        __builtin_prefetch(src + sv  + len + 32, 0, 0);
-        __builtin_prefetch(src + pos + len + 32, 0, 0);
-    }
-#elif defined(__AVX2__)
+#ifdef __AVX2__
     while (len + 32 <= max_match) {
         __m256i sv32  = _mm256_loadu_si256((const __m256i *)(src + sv  + len));
         __m256i pos32 = _mm256_loadu_si256((const __m256i *)(src + pos + len));

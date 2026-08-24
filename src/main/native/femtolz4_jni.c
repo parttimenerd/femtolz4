@@ -43,8 +43,7 @@ static lz4_stream_t *get_stream(void)
 /*
  * Compile femto_decompress as AVX2 on x86-64 so the compiler never emits
  * vzeroupper when transitioning between the inline YMM copies below and the
- * surrounding scalar control flow.  On other architectures the attribute is
- * a no-op.
+ * surrounding scalar control flow.
  */
 #if defined(__x86_64__) || defined(_M_X64)
 __attribute__((target("avx2")))
@@ -190,7 +189,6 @@ static int femto_decompress(const uint8_t *src, int src_off, int src_len,
  * Java fallback is used instead of crashing with SIGILL.
  *
  * On x86-64 (amd64) we require: SSE2, AVX2, FMA, BMI1, BMI2, POPCNT.
- * On AArch64, NEON is mandatory — no runtime check needed.
  */
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 {
@@ -221,7 +219,6 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved)
 
     (void)eax; (void)ecx; (void)edx;
 #endif
-    /* ARM NEON is mandatory on AArch64 — no runtime check needed. */
     return JNI_VERSION_1_6;
 }
 
