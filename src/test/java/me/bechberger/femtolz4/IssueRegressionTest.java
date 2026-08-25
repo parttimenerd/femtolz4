@@ -164,7 +164,7 @@ class IssueRegressionTest {
 
     @Test void flushMaterializesPartialBlock() throws Exception {
         var baos = new ByteArrayOutputStream();
-        var lz4  = new LZ4FrameOutputStream(baos);
+        var lz4  = new LZ4FrameOutputStream(baos, true); // syncFlush=true
         // Write less than one block — stays buffered without flush
         lz4.write("hello world".getBytes(StandardCharsets.UTF_8));
         int beforeFlush = baos.size();

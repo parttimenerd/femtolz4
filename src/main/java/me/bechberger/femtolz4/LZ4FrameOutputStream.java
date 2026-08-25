@@ -36,6 +36,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
     private final OutputStream out;
     private final int blockSize;
     private final LZ4.Compressor compressor;
+    private final boolean syncFlush;
     private final byte[] inputBuf;
     private final byte[] compBuf;
     private int inputPos;
@@ -46,18 +47,37 @@ public final class LZ4FrameOutputStream extends OutputStream {
      * Wraps {@code out} using the given compressor and block size.
      *
      * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
+     * @param syncFlush when {@code true}, {@link #flush()} compresses and emits any
+     *                  buffered data before flushing the underlying stream; when
+     *                  {@code false} (the default, matching lz4-java), {@link #flush()}
+     *                  only flushes the underlying stream without emitting a partial block
      */
-    public LZ4FrameOutputStream(OutputStream out, int blockSize, LZ4.Compressor compressor) {
+    public LZ4FrameOutputStream(OutputStream out, int blockSize, LZ4.Compressor compressor, boolean syncFlush) {
         this.out        = out;
         this.blockSize  = validateBlockSize(blockSize);
         this.compressor = compressor;
+        this.syncFlush  = syncFlush;
         this.inputBuf   = new byte[this.blockSize];
         this.compBuf    = new byte[LZ4.maxCompressedLength(this.blockSize)];
     }
 
+    /**
+     * Wraps {@code out} using the given compressor and block size.
+     *
+     * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
+     */
+    public LZ4FrameOutputStream(OutputStream out, int blockSize, LZ4.Compressor compressor) {
+        this(out, blockSize, compressor, false);
+    }
+
     /** Wraps {@code out} using the given compressor and the default block size. */
     public LZ4FrameOutputStream(OutputStream out, LZ4.Compressor compressor) {
-        this(out, DEFAULT_BLOCK_SIZE, compressor);
+        this(out, DEFAULT_BLOCK_SIZE, compressor, false);
+    }
+
+    /** Wraps {@code out} using the given compressor, the default block size, and the given {@code syncFlush} setting. */
+    public LZ4FrameOutputStream(OutputStream out, LZ4.Compressor compressor, boolean syncFlush) {
+        this(out, DEFAULT_BLOCK_SIZE, compressor, syncFlush);
     }
 
     /**
@@ -74,6 +94,18 @@ public final class LZ4FrameOutputStream extends OutputStream {
     /** Wraps {@code out} with the default block size and the given compression level. */
     public LZ4FrameOutputStream(OutputStream out, int level) {
         this(out, DEFAULT_BLOCK_SIZE, level);
+    }
+
+    /**
+     * Wraps {@code out} with 4 MiB blocks, fastest compression, and the given
+     * {@code syncFlush} setting.
+     *
+     * @param syncFlush when {@code true}, {@link #flush()} emits a partial block before
+     *                  flushing the underlying stream; when {@code false} (the default,
+     *                  matching lz4-java), {@link #flush()} only flushes the underlying stream
+     */
+    public LZ4FrameOutputStream(OutputStream out, boolean syncFlush) {
+        this(out, DEFAULT_BLOCK_SIZE, LZ4.compressor(LZ4.LEVEL_FAST), syncFlush);
     }
 
     /** Wraps {@code out} with 4 MiB blocks and fastest compression. */
@@ -114,7 +146,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
     public void flush() throws IOException {
         ensureOpen();
         ensureHeader();
-        if (inputPos > 0) flushBlock();
+        if (syncFlush && inputPos > 0) flushBlock();
         out.flush();
     }
 

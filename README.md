@@ -18,7 +18,7 @@ _This is a prototype of the SapMachine team._
 <dependency>
   <groupId>me.bechberger</groupId>
   <artifactId>femtolz4</artifactId>
-  <version>0.2.1</version>
+  <version>0.2.2</version>
 </dependency>
 ```
 
@@ -216,7 +216,7 @@ Requirements: JDK 17+, Maven 3.6+.
 mvn package
 ```
 
-The JAR lands at `target/femtolz4-0.2.1.jar`.
+The JAR lands at `target/femtolz4-0.2.2.jar`.
 
 
 ### Native libraries

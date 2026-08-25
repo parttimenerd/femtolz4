@@ -6,7 +6,7 @@
 
     <groupId>me.bechberger</groupId>
     <artifactId>femtolz4</artifactId>
-    <version>0.2.1</version>
+    <version>0.2.2</version>
     <packaging>jar</packaging>
 
     <name>femtolz4</name>

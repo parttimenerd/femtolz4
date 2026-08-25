@@ -259,6 +259,44 @@ class LZ4Test {
         assertEquals(0, compressed[n - 1]);
     }
 
+    // ── syncFlush ─────────────────────────────────────────────────────────────
+
+    @Test void syncFlushFalseDoesNotEmitPartialBlock() throws IOException {
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(sink, false)) {
+            lz4.write(new byte[10]);
+            int afterHeader = sink.size();
+            lz4.flush();
+            assertEquals(afterHeader, sink.size(), "flush() with syncFlush=false must not emit a block");
+        }
+    }
+
+    @Test void syncFlushTrueEmitsReadablePartialBlock() throws IOException {
+        byte[] data = "hello partial flush".getBytes();
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(sink, true)) {
+            lz4.write(data);
+            lz4.flush();
+            ByteArrayOutputStream withEnd = new ByteArrayOutputStream();
+            withEnd.write(sink.toByteArray());
+            withEnd.write(new byte[]{0, 0, 0, 0});
+            byte[] decoded = new LZ4FrameInputStream(
+                    new ByteArrayInputStream(withEnd.toByteArray())).readAllBytes();
+            assertArrayEquals(data, decoded, "partial block must decompress correctly after syncFlush");
+        }
+    }
+
+    @Test void closeAlwaysFinalizesRegardlessOfSyncFlush() throws IOException {
+        byte[] data = "close must finalize".getBytes();
+        ByteArrayOutputStream sink = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(sink, false)) {
+            lz4.write(data);
+        }
+        byte[] decoded = new LZ4FrameInputStream(
+                new ByteArrayInputStream(sink.toByteArray())).readAllBytes();
+        assertArrayEquals(data, decoded, "close() must flush+finalize even when syncFlush=false");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static void assertRoundTrip(byte[] src, int maxChain) {

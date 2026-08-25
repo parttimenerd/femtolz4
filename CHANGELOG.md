@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-25
+
+## [0.2.2] - 2026-08-25
+
+### Added
+- `LZ4FrameOutputStream(OutputStream, boolean syncFlush)` — opt-in sync-flush mode matching lz4-java's `syncFlush` parameter: when `true`, `flush()` compresses and emits any buffered data before flushing the underlying stream; when `false` (the default), `flush()` only flushes the underlying stream without emitting a partial block
+- `LZ4FrameOutputStream(OutputStream, LZ4.Compressor, boolean syncFlush)` — same opt-in sync-flush with a custom compressor
+- `LZ4FrameOutputStream(OutputStream, int blockSize, LZ4.Compressor, boolean syncFlush)` — full constructor with explicit block size, compressor, and sync-flush flag
+
+### Changed
+- `LZ4FrameOutputStream.flush()` default behaviour changed: no longer emits a partial block by default (matches lz4-java's `syncFlush=false` default). Use `new LZ4FrameOutputStream(out, true)` to restore the previous always-flush behaviour.
+
 ## [0.2.1] - 2026-08-25
 
 ### Added
