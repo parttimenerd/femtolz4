@@ -12,7 +12,7 @@ import java.util.*;
  *
  * Run:
  *   java --enable-native-access=ALL-UNNAMED \
- *        -cp "target/test-classes:target/femtolz4-0.1.0.jar:$(ls ~/.m2/repository/at/yawi/lz4/lz4-java/1.11.0/*.jar)" \
+ *        -cp "target/test-classes:target/femtolz4-0.1.0.jar:$(ls ~/.m2/repository/at/yawk/lz4/lz4-java/1.11.0/*.jar)" \
  *        me.bechberger.femtolz4.DeepBenchmark
  */
 public class DeepBenchmark {

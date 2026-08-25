@@ -37,7 +37,7 @@ class MainTest {
                 new PrintStream(err, true, StandardCharsets.UTF_8));
 
         assertEquals(1, exitCode);
-        assertTrue(err.toString(StandardCharsets.UTF_8).contains("level must be between 1 and 12"));
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("level must be between 1 and 9"));
     }
 
     @Test void nonNumericLevelIsRejected() throws Exception {

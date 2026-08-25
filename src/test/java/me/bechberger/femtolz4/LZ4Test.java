@@ -113,17 +113,17 @@ class LZ4Test {
 
     @Test void frameRoundTripSimple() throws IOException {
         byte[] src = "Hello, LZ4 frame world!".getBytes(StandardCharsets.UTF_8);
-        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4FrameOutputStream.LEVEL_FAST);
+        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     @Test void frameRoundTripEmpty() throws IOException {
-        assertFrameRoundTrip(new byte[0], LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4FrameOutputStream.LEVEL_FAST);
+        assertFrameRoundTrip(new byte[0], LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     @ParameterizedTest @ValueSource(ints = {64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024})
     void frameRoundTripAllBlockSizes(int blockSize) throws IOException {
         byte[] src = randomBytes(blockSize * 2 + 1337, 7);
-        assertFrameRoundTrip(src, blockSize, LZ4FrameOutputStream.LEVEL_FAST);
+        assertFrameRoundTrip(src, blockSize, LZ4.LEVEL_FAST);
     }
 
     @ParameterizedTest @ValueSource(ints = {1, 2, 3, 4, 5, 6, 7, 8, 9})
@@ -142,20 +142,20 @@ class LZ4Test {
     @Test void frameInvalidBlockSizeRejected() {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         assertThrows(IllegalArgumentException.class,
-            () -> new LZ4FrameOutputStream(baos, 12345, LZ4FrameOutputStream.LEVEL_FAST));
+            () -> new LZ4FrameOutputStream(baos, 12345, LZ4.LEVEL_FAST));
         assertThrows(IllegalArgumentException.class,
-            () -> new LZ4FrameOutputStream(baos, 65 * 1024, LZ4FrameOutputStream.LEVEL_FAST));
+            () -> new LZ4FrameOutputStream(baos, 65 * 1024, LZ4.LEVEL_FAST));
     }
 
     @Test void frameMultipleBlocks() throws IOException {
         // data larger than one block
         byte[] src = randomBytes(LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE * 3 + 500, 42);
-        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4FrameOutputStream.LEVEL_FAST);
+        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     @Test void frameExactlyOneBlock() throws IOException {
         byte[] src = randomBytes(LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, 1);
-        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4FrameOutputStream.LEVEL_FAST);
+        assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     @Test void frameWriteByteAtATime() throws IOException {
@@ -242,7 +242,7 @@ class LZ4Test {
 
     @Test void frameLevelConstructorUsesDefaultBlockSize() throws IOException {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, LZ4FrameOutputStream.LEVEL_NORMAL)) {
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, LZ4.LEVEL_DEFAULT)) {
             lz4.write("test".getBytes(StandardCharsets.UTF_8));
         }
         byte[] compressed = baos.toByteArray();
@@ -277,7 +277,7 @@ class LZ4Test {
     }
 
     static byte[] frameCompress(byte[] src) throws IOException {
-        return frameCompress(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4FrameOutputStream.LEVEL_FAST);
+        return frameCompress(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     static byte[] frameCompress(byte[] src, int blockSize, int level) throws IOException {

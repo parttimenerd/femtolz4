@@ -20,8 +20,8 @@ import java.io.OutputStream;
  * encoding is not implemented to keep the encoder simple.
  * The default constructor uses 4 MiB blocks and the fastest compression level.
  *
- * <p>The public compression knob is {@code level} from {@value #MIN_LEVEL} to
- * {@value #MAX_LEVEL}. Higher levels spend more effort searching for matches,
+ * <p>The public compression knob is {@code level} from {@link LZ4#LEVEL_FAST} to
+ * {@link LZ4#LEVEL_MAX}. Higher levels spend more effort searching for matches,
  * improving ratio at the cost of CPU time.
  *
  * @see <a href="https://github.com/lz4/lz4/blob/dev/doc/lz4_Frame_format.md">LZ4 frame format spec</a>
@@ -32,30 +32,6 @@ public final class LZ4FrameOutputStream extends OutputStream {
 
     /** Default block size: 4 MiB. */
     public static final int DEFAULT_BLOCK_SIZE = 4 << 20;
-
-    /**
-     * Minimum compression level accepted by {@link #LZ4FrameOutputStream(OutputStream, int)}.
-     * @deprecated Use {@link LZ4#LEVEL_FAST}.
-     */
-    @Deprecated public static final int MIN_LEVEL = LZ4.LEVEL_FAST;
-
-    /**
-     * Maximum compression level accepted by {@link #LZ4FrameOutputStream(OutputStream, int)}.
-     * @deprecated Use {@link LZ4#LEVEL_MAX}.
-     */
-    @Deprecated public static final int MAX_LEVEL = LZ4.LEVEL_MAX;
-
-    /**
-     * Fastest compression level.
-     * @deprecated Use {@link LZ4#LEVEL_FAST}.
-     */
-    @Deprecated public static final int LEVEL_FAST   = LZ4.LEVEL_FAST;
-
-    /**
-     * Balanced compression level.
-     * @deprecated Use {@link LZ4#LEVEL_DEFAULT}.
-     */
-    @Deprecated public static final int LEVEL_NORMAL = LZ4.LEVEL_DEFAULT;
 
     private final OutputStream out;
     private final int blockSize;

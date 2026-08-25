@@ -206,7 +206,8 @@ Requirements: JDK 17+, Maven 3.6+.
 mvn package
 ```
 
-The JAR lands at `target/femtolz4-0.1.3.jar`.
+The JAR lands at `target/femtolz4-0.2.0.jar`.
+
 
 ### Native libraries
 

@@ -91,7 +91,7 @@ class YawkatFuzzTest {
     // ── Core assertion helpers ────────────────────────────────────────────────
 
     /**
-     * Assert all 11 femtolz4 compressors produce output that:
+     * Assert all femtolz4 compressors produce output that:
      * 1. femto-native decompresses to src
      * 2. femto-java decompresses to src
      * 3. yawkat decompresses to src  (when originalLen >= 16 — yawkat restriction)

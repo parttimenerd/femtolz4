@@ -23,7 +23,6 @@ import static org.junit.jupiter.api.Assertions.*;
  *  - LZ4.isNativeAvailable()
  *  - LZ4.decompress() Decompressor functional interface
  *  - LZ4.compressJava() / decompressJava() (pure-Java path)
- *  - LZ4.HC_MIN_LEVEL / HC_MAX_LEVEL constants (deprecated)
  *  - LZ4FrameOutputStream(OutputStream) default constructor
  *  - LZ4FrameOutputStream(OutputStream, LZ4.Compressor)
  *  - LZ4FrameOutputStream level-to-ratio monotonicity
@@ -38,11 +37,6 @@ import static org.junit.jupiter.api.Assertions.*;
 class ApiCoverageTest {
 
     // ── LZ4 constant sanity ───────────────────────────────────────────────────
-
-    @Test void hcLevelRange() {
-        assertEquals(1,   LZ4.HC_MIN_LEVEL);
-        assertEquals(256, LZ4.HC_MAX_LEVEL);
-    }
 
     @Test void isNativeAvailableReturnsBooleanWithoutThrowing() {
         // Just must not throw; result is platform-dependent
@@ -539,10 +533,10 @@ class ApiCoverageTest {
     @Test void levelConstantsExist() {
         assertEquals(1,  LZ4.LEVEL_FAST);
         assertEquals(9,  LZ4.LEVEL_DEFAULT);
-        assertEquals(12, LZ4.LEVEL_MAX);
+        assertEquals(9,  LZ4.LEVEL_MAX);
     }
 
-    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9, 12})
+    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9})
     void compressorLevelRoundTrip(int level) {
         LZ4.Compressor c = LZ4.compressor(level);
         byte[] src = "hello world!".repeat(1000).getBytes(StandardCharsets.UTF_8);
@@ -552,7 +546,7 @@ class ApiCoverageTest {
         assertArrayEquals(src, LZ4.decompress(java.util.Arrays.copyOf(dst, n), src.length));
     }
 
-    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9, 12})
+    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9})
     void compressorJavaLevelRoundTrip(int level) {
         LZ4.Compressor c = LZ4.compressorJava(level);
         byte[] src = "hello world!".repeat(1000).getBytes(StandardCharsets.UTF_8);
@@ -572,7 +566,7 @@ class ApiCoverageTest {
     }
 
     @Test void compressorLevelMaxClampedToLevel9Behaviour() {
-        // LEVEL_MAX (12) has no opt-parser; must still round-trip correctly
+        // LEVEL_MAX (9) is the highest chain depth; must still round-trip correctly
         LZ4.Compressor c = LZ4.compressor(LZ4.LEVEL_MAX);
         byte[] src = "max level".repeat(500).getBytes(StandardCharsets.UTF_8);
         byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];

@@ -27,16 +27,10 @@ public final class LZ4 {
     public static final int LEVEL_DEFAULT = 9;
     /**
      * Maximum compression level accepted by {@link #compressor(int)}.
-     * Levels 10–12 are clamped to level-9 behaviour; femtolz4 does not implement
-     * the lz4opt parser used by the reference implementation at those levels.
+     * Levels 1–9 use hash-chain compression; level 9 is the practical
+     * ceiling for LZ4 compression ratio.
      */
-    public static final int LEVEL_MAX     = 12;
-
-    /** @deprecated Use {@link #LEVEL_FAST}. */
-    @Deprecated public static final int HC_MIN_LEVEL = 1;
-    /** @deprecated Use {@link #LEVEL_DEFAULT}. */
-    @Deprecated public static final int HC_MAX_LEVEL = 256;
-
+    public static final int LEVEL_MAX   = 9;
 
     /**
      * Compressor handle returned by the factory methods, compatible with the
@@ -65,27 +59,24 @@ public final class LZ4 {
 
     /** Returns a fast (chain=1) compressor. Equivalent to lz4-java's {@code fastCompressor()}. */
     public static Compressor compress() {
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            compress(src, srcOff, srcLen, dst, dstOff, 1);
+        return compressor(LEVEL_FAST);
     }
 
     /** Returns a high-compression (chain=256) compressor. Equivalent to lz4-java's {@code highCompressor()}. */
     public static Compressor compressHigh() {
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            compress(src, srcOff, srcLen, dst, dstOff, HC_MAX_LEVEL);
+        return compressor(LEVEL_DEFAULT);
     }
 
     /**
      * Returns a high-compression compressor at the given level.
      *
-     * @param level chain depth from {@value #HC_MIN_LEVEL} to {@value #HC_MAX_LEVEL}
+     * @param level chain depth from 1 to 256
      * @deprecated Use {@link #compressor(int)}.
      */
     @Deprecated
     public static Compressor compressHigh(int level) {
-        int maxChain = Math.max(HC_MIN_LEVEL, Math.min(HC_MAX_LEVEL, level));
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            compress(src, srcOff, srcLen, dst, dstOff, maxChain);
+        int maxChain = Math.max(1, Math.min(256, level));
+        return compressorJavaForChain(maxChain);
     }
 
     /**
@@ -99,16 +90,33 @@ public final class LZ4 {
      *   <li>Level 6: chain=32</li>
      *   <li>Level 7: chain=64</li>
      *   <li>Level 8: chain=128</li>
-     *   <li>Level 9–{@value #LEVEL_MAX}: chain=256 (no optimal parser)</li>
+     *   <li>Level 9: chain=256 (maximum; {@link #LEVEL_MAX})</li>
      * </ul>
+     *
+     * <p>The returned instance is an {@link LZ4Java} (or a native wrapper when
+     * native is available). Reusing the same instance across calls avoids
+     * re-allocating hash tables.
      *
      * @param level compression level from {@value #LEVEL_FAST} to {@value #LEVEL_MAX};
      *              values outside this range are clamped
      */
     public static Compressor compressor(int level) {
         int chain = levelToChain(level);
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            compress(src, srcOff, srcLen, dst, dstOff, chain);
+        if (NativeLZ4.AVAILABLE && chain > 0) {
+            return (src, srcOff, srcLen, dst, dstOff, maxDestLen) -> {
+                int repeatedSamples = (srcLen >= X86_NATIVE_CHAIN_SAMPLE_MIN)
+                    ? LZ4Java.countRepeatedSamples(src, srcOff, srcLen) : 0;
+                boolean useJava = chain == 1 && repeatedSamples >= 2 && repeatedSamples < 6;
+                if (!useJava) {
+                    int n = NativeLZ4.compress(src, srcOff, srcLen, dst, dstOff,
+                                               dst.length - dstOff, chain);
+                    if (n > 0) return n;
+                }
+                return new LZ4Java(chain).compressJavaImpl(src, srcOff, srcLen, dst, dstOff, chain,
+                                                            repeatedSamples);
+            };
+        }
+        return compressorJavaForChain(chain);
     }
 
     /**
@@ -119,8 +127,11 @@ public final class LZ4 {
      */
     public static Compressor compressorJava(int level) {
         int chain = levelToChain(level);
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, chain);
+        return compressorJavaForChain(chain);
+    }
+
+    private static LZ4Java compressorJavaForChain(int chain) {
+        return new LZ4Java(chain);
     }
 
     private static int levelToChain(int level) {
@@ -133,7 +144,7 @@ public final class LZ4 {
             case 6    -> 32;
             case 7    -> 64;
             case 8    -> 128;
-            default   -> 256; // 9–12
+            default   -> 256; // 9
         };
     }
 
@@ -145,29 +156,31 @@ public final class LZ4 {
         };
     }
 
+    /** Returns a decompressor. */
+    public static Decompressor decompressor() {
+        return decompress();
+    }
+
     /** Returns a fast (chain=1) compressor that always uses the pure-Java path. */
     public static Compressor compressJava() {
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, 1);
+        return new LZ4Java(1);
     }
 
     /** Returns a high-compression (chain=256) compressor that always uses the pure-Java path. */
     public static Compressor compressHighJava() {
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, HC_MAX_LEVEL);
+        return new LZ4Java(256);
     }
 
     /**
      * Returns a high-compression compressor at the given level that always uses the pure-Java path.
      *
-     * @param level chain depth from {@value #HC_MIN_LEVEL} to {@value #HC_MAX_LEVEL}
+     * @param level chain depth from 1 to 256
      * @deprecated Use {@link #compressorJava(int)}.
      */
     @Deprecated
     public static Compressor compressHighJava(int level) {
-        int maxChain = Math.max(HC_MIN_LEVEL, Math.min(HC_MAX_LEVEL, level));
-        return (src, srcOff, srcLen, dst, dstOff, maxDestLen) ->
-            LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+        int maxChain = Math.max(1, Math.min(256, level));
+        return new LZ4Java(maxChain);
     }
 
     /** Returns a decompressor that always uses the pure-Java path. */
@@ -215,7 +228,8 @@ public final class LZ4 {
                 if (n > 0) return n;
             }
         }
-        return LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+        return new LZ4Java(maxChain).compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain,
+                                                       SAMPLE_COUNT_UNKNOWN);
     }
 
     /** Convenience: fast compress, returns a trimmed copy. */
@@ -225,17 +239,13 @@ public final class LZ4 {
 
     /** Convenience: high-ratio compress, returns a trimmed copy. */
     public static byte[] compressHigh(byte[] src) {
-        return compress(src, HC_MAX_LEVEL);
+        return compress(src, 256);
     }
 
-    /** Convenience: allocates (or reuses) an output buffer and returns a trimmed copy. */
+    /** Convenience: allocates an output buffer and returns a trimmed copy. */
     public static byte[] compress(byte[] src, int maxChain) {
         int maxLen = maxCompressedLength(src.length);
-        byte[] dst = LZ4Java.TL_DST.get();
-        if (dst.length < maxLen) {
-            dst = new byte[maxLen];
-            LZ4Java.TL_DST.set(dst);
-        }
+        byte[] dst = new byte[maxLen];
         int len = compress(src, 0, src.length, dst, 0, maxChain);
         return Arrays.copyOf(dst, len);
     }
@@ -243,12 +253,9 @@ public final class LZ4 {
     /** Pure-Java compress, bypassing the native path. For benchmarking. */
     static byte[] compressJava(byte[] src, int maxChain) {
         int maxLen = maxCompressedLength(src.length);
-        byte[] dst = LZ4Java.TL_DST.get();
-        if (dst.length < maxLen) {
-            dst = new byte[maxLen];
-            LZ4Java.TL_DST.set(dst);
-        }
-        int len = LZ4Java.compressJavaImpl(src, 0, src.length, dst, 0, maxChain);
+        byte[] dst = new byte[maxLen];
+        int len = new LZ4Java(maxChain).compressJavaImpl(src, 0, src.length, dst, 0, maxChain,
+                                                          SAMPLE_COUNT_UNKNOWN);
         return Arrays.copyOf(dst, len);
     }
 
@@ -260,7 +267,8 @@ public final class LZ4 {
     /** Pure-Java compress with offsets — no allocation. */
     static int compressJava(byte[] src, int srcOff, int srcLen,
                             byte[] dst, int dstOff, int maxChain) {
-        return LZ4Java.compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+        return new LZ4Java(maxChain).compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain,
+                                                       SAMPLE_COUNT_UNKNOWN);
     }
 
 

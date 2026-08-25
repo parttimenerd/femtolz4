@@ -145,6 +145,19 @@ class FuzzTest {
         }
     }
 
+    @Property
+    void allLevelsRoundTrip(@ForAll @Size(max = 16384) byte[] data) {
+        for (int level : new int[]{1, 3, 5, 7, 9}) {
+            byte[] comp = new byte[LZ4.maxCompressedLength(data.length)];
+            int n = LZ4.compressor(level).compress(data, 0, data.length, comp, 0, comp.length);
+            byte[] compressed = Arrays.copyOf(comp, n);
+            assertArrayEquals(data, LZ4.decompress(compressed, data.length),
+                    "level=" + level + " native-decompress");
+            assertArrayEquals(data, LZ4.decompressJava(compressed, data.length),
+                    "level=" + level + " java-decompress");
+        }
+    }
+
     // ── Edge cases ────────────────────────────────────────────────────────────
 
     @Example

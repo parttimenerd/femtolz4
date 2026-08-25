@@ -248,12 +248,7 @@ def main() -> None:
                 "Deploying to Maven Central")
 
         # 6. Commit + tag
-        files_to_add = [
-            "pom.xml", "CHANGELOG.md",
-        ]
-        if not args.no_bump and (ROOT / "README.md").exists():
-            files_to_add.insert(1, "README.md")
-        git("add", *files_to_add)
+        git("add", "-u")
         git("commit", "-m", f"Release {new}")
         git("tag", "-a", f"v{new}", "-m", f"Release {new}")
 

@@ -8,9 +8,14 @@ import java.util.Arrays;
 /**
  * Pure-Java LZ4 block compressor and decompressor.
  *
- * <p>All compress/decompress logic lives here. {@link LZ4} is the public dispatch layer.
+ * <p>Implements both {@link LZ4.Compressor} and {@link LZ4.Decompressor}.
+ * Each instance owns its own hash/DP tables; constructing one allocates them,
+ * and reusing the same instance across calls avoids repeated allocation.
+ *
+ * <p>Obtain instances via {@link LZ4#compressor(int)} or {@link LZ4#decompressor()}
+ * rather than constructing directly.
  */
-public final class LZ4Java {
+public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
 
     static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
@@ -31,17 +36,29 @@ public final class LZ4Java {
     private static final int HASH_BITS_FAST  = 12;
     private static final int HASH_SIZE_FAST  = 1 << HASH_BITS_FAST;
 
-    /* Thread-local tables — reused per call to avoid allocation. */
-    private static final ThreadLocal<long[]> TL_FAST_HEAD  = ThreadLocal.withInitial(() -> new long[HASH_SIZE_FAST]);
+    /**
+     * Compression level: 0 = 2-way fast, 1 = fast, 2+ = chain depth.
+     */
+    private final int maxChain;
 
-    /* 2-way associative: two slots per bucket (LRU). Slightly better ratio than chain=1. */
-    private static final ThreadLocal<long[]> TL_FAST2_HEAD = ThreadLocal.withInitial(() -> new long[HASH_SIZE_FAST * 2]);
-    /* Chain tables: head[] filled NIL before each block; tail[] only read from valid heads. */
-    private static final ThreadLocal<int[]>  TL_CHAIN_HEAD = ThreadLocal.withInitial(() -> new int[HASH_SIZE]);
-    private static final ThreadLocal<long[]> TL_CHAIN_TAIL = ThreadLocal.withInitial(() -> new long[WINDOW_SIZE]);
+    /* Per-instance hash tables — allocated once at construction. */
+    private final long[] fastHead;
+    private final long[] fast2Head;
+    private final int[]  chainHead;
+    private final long[] chainTail;
 
-    static final ThreadLocal<byte[]> TL_DST   = ThreadLocal.withInitial(() -> new byte[0]);
-    private static final ThreadLocal<byte[]> TL_DECOMP = ThreadLocal.withInitial(() -> new byte[0]);
+    /**
+     * Create a pure-Java compressor/decompressor at the given chain depth.
+     *
+     * @param maxChain 0 = 2-way fast, 1 = fast, 2–256 = chain depth
+     */
+    public LZ4Java(int maxChain) {
+        this.maxChain  = maxChain;
+        fastHead   = (maxChain == 1)  ? new long[HASH_SIZE_FAST]     : null;
+        fast2Head  = (maxChain == 0)  ? new long[HASH_SIZE_FAST * 2] : null;
+        chainHead  = (maxChain >= 2)  ? new int[HASH_SIZE]           : null;
+        chainTail  = (maxChain >= 2)  ? new long[WINDOW_SIZE]        : null;
+    }
 
     /**
      * Count how many of 8 evenly-spaced 4-byte windows have the same value as
@@ -61,6 +78,24 @@ public final class LZ4Java {
         return count;
     }
 
+    // ── LZ4.Compressor implementation ────────────────────────────────────────
+
+    @Override
+    public int compress(byte[] src, int srcOff, int srcLen,
+                        byte[] dst, int dstOff, int maxDestLen) {
+        return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain, LZ4.SAMPLE_COUNT_UNKNOWN);
+    }
+
+    // ── LZ4.Decompressor implementation ──────────────────────────────────────
+
+    @Override
+    public int decompress(byte[] src, int srcOff, byte[] dst, int dstOff, int originalLen) {
+        decompressJavaImpl(src, srcOff, src.length - srcOff, dst, dstOff, originalLen, dstOff);
+        return originalLen;
+    }
+
+    // ── Static convenience shims (delegate to a one-shot instance) ────────────
+
     /** Equivalent to lz4-java's {@code factory.fastCompressor()}. */
     public static LZ4.Compressor fastCompressor() { return LZ4.compressor(LZ4.LEVEL_FAST); }
 
@@ -70,7 +105,7 @@ public final class LZ4Java {
     /**
      * Equivalent to lz4-java's {@code factory.highCompressor(level)}.
      *
-     * @param level HC level from {@value LZ4#HC_MIN_LEVEL} to {@value LZ4#HC_MAX_LEVEL}
+     * @param level chain depth from 1 to 256
      * @deprecated Use {@link LZ4#compressor(int)}.
      */
     @Deprecated
@@ -79,32 +114,26 @@ public final class LZ4Java {
     /** Equivalent to lz4-java's {@code factory.fastDecompressor()}. */
     public static LZ4.Decompressor fastDecompressor() { return LZ4.decompress(); }
 
-    /** Pure-Java compress at chain=1, bypassing native. For benchmarking. */
-    public static byte[] compressJava(byte[] src) {
-        return compressJava(src, 1);
-    }
+    /** Pure-Java compress at chain=1, bypassing native. */
+    public static byte[] compressJava(byte[] src) { return compressJava(src, 1); }
 
-    /** Pure-Java compress, bypassing native. For benchmarking. */
-    public static byte[] compressJava(byte[] src, int maxChain) {
+    /** Pure-Java compress, bypassing native. */
+    public static byte[] compressJava(byte[] src, int chain) {
         int maxLen = LZ4.maxCompressedLength(src.length);
         byte[] dst = new byte[maxLen];
-        int len = compressJavaImpl(src, 0, src.length, dst, 0, maxChain);
+        int len = new LZ4Java(chain).compressJavaImpl(src, 0, src.length, dst, 0, chain, LZ4.SAMPLE_COUNT_UNKNOWN);
         return Arrays.copyOf(dst, len);
     }
 
-    /** Pure-Java compress with offsets — no allocation. For benchmarking. */
+    /** Pure-Java compress with offsets — no allocation. */
     public static int compressJava(byte[] src, int srcOff, int srcLen,
-                                   byte[] dst, int dstOff, int maxChain) {
-        return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain);
+                                   byte[] dst, int dstOff, int chain) {
+        return new LZ4Java(chain).compressJavaImpl(src, srcOff, srcLen, dst, dstOff, chain, LZ4.SAMPLE_COUNT_UNKNOWN);
     }
 
-    /** Pure-Java decompress, bypassing native. For benchmarking. */
+    /** Pure-Java decompress, bypassing native. */
     public static byte[] decompressJava(byte[] src, int decompressedSize) {
-        byte[] dst = TL_DECOMP.get();
-        if (dst.length < decompressedSize) {
-            dst = new byte[decompressedSize];
-            TL_DECOMP.set(dst);
-        }
+        byte[] dst = new byte[decompressedSize];
         int n = decompressJavaImpl(src, 0, src.length, dst, 0, decompressedSize, 0);
         return Arrays.copyOf(dst, n);
     }
@@ -124,14 +153,9 @@ public final class LZ4Java {
      * head[h] = most-recent position at hash h.
      * tail[pos & MASK] = packed (value<<32|nextPos) — avoids a cold src[sv] load per chain step.
      */
-    static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
-                                byte[] dst, int dstOff, int maxChain) {
-        return compressJavaImpl(src, srcOff, srcLen, dst, dstOff, maxChain, LZ4.SAMPLE_COUNT_UNKNOWN);
-    }
-
-    static int compressJavaImpl(byte[] src, int srcOff, int srcLen,
-                                byte[] dst, int dstOff, int maxChain,
-                                int repeatedSamplesHint) {
+    int compressJavaImpl(byte[] src, int srcOff, int srcLen,
+                         byte[] dst, int dstOff, int chain,
+                         int repeatedSamplesHint) {
         /* No legal match can improve blocks this short. Avoid both JNI and
            clearing a 32-512 KiB hash table just to emit one literal run. */
         if (srcLen > 0 && srcLen <= 6) {
@@ -139,10 +163,10 @@ public final class LZ4Java {
             copyLiterals(src, srcOff, dst, dstOff + 1, srcLen);
             return srcLen + 1;
         }
-        if (maxChain <= 0) {
+        if (chain <= 0) {
             return compressFast2Way(src, srcOff, srcLen, dst, dstOff);
         }
-        if (maxChain == 1) {
+        if (chain == 1) {
             return compressFast(src, srcOff, srcLen, dst, dstOff);
         }
         int repeatedSamples = repeatedSamplesHint != LZ4.SAMPLE_COUNT_UNKNOWN
@@ -150,13 +174,13 @@ public final class LZ4Java {
             : (srcLen >= LZ4.X86_NATIVE_CHAIN_SAMPLE_MIN
                 ? countRepeatedSamples(src, srcOff, srcLen) : 0);
         boolean recoverMixedBoundary = repeatedSamples >= 2 && repeatedSamples < 6;
-        if (maxChain == 2) {
+        if (chain == 2) {
             return compressChain2(src, srcOff, srcLen, dst, dstOff, recoverMixedBoundary);
         }
         if (srcLen == 0) return 0;
 
-        int[]  head    = TL_CHAIN_HEAD.get();
-        long[] tail    = TL_CHAIN_TAIL.get();
+        int[]  head    = chainHead;
+        long[] tail    = chainTail;
         Arrays.fill(head, NIL);
 
         int op        = dstOff;
@@ -301,12 +325,12 @@ public final class LZ4Java {
     }
 
     /* chain=2: unrolled 2-probe variant with back-to-back tail[] loads for OOO overlap. */
-    private static int compressChain2(byte[] src, int srcOff, int srcLen,
-                                      byte[] dst, int dstOff, boolean recoverMixedBoundary) {
+    private int compressChain2(byte[] src, int srcOff, int srcLen,
+                               byte[] dst, int dstOff, boolean recoverMixedBoundary) {
         if (srcLen == 0) return 0;
 
-        int[]  head    = TL_CHAIN_HEAD.get();
-        long[] tail    = TL_CHAIN_TAIL.get();
+        int[]  head    = chainHead;
+        long[] tail    = chainTail;
         Arrays.fill(head, NIL);
 
         int op        = dstOff;
@@ -450,10 +474,10 @@ public final class LZ4Java {
 
     /* maxChain=0: 2-way associative long[] table, 2 slots per bucket (LRU).
        Sentinel = srcOff-WINDOW_SIZE-1 in low 32 bits. v4 fingerprint avoids src[] read on misses. */
-    private static int compressFast2Way(byte[] src, int srcOff, int srcLen,
-                                        byte[] dst, int dstOff) {
+    private int compressFast2Way(byte[] src, int srcOff, int srcLen,
+                                 byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head = TL_FAST2_HEAD.get();
+        long[] head = fast2Head;
         long sentinel = (long)(srcOff - WINDOW_SIZE - 1) & 0xFFFFFFFFL;
         Arrays.fill(head, sentinel);
 
@@ -582,10 +606,10 @@ public final class LZ4Java {
 
     /* chain=1: long[4096] storing (v4<<32|pos). Sentinel low 32 bits = srcOff-WINDOW_SIZE-1.
        Window check first (cheap), then v4 fingerprint check avoids src[] read on most misses. */
-    private static int compressFast(byte[] src, int srcOff, int srcLen,
-                                    byte[] dst, int dstOff) {
+    private int compressFast(byte[] src, int srcOff, int srcLen,
+                             byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
-        long[] head = TL_FAST_HEAD.get();
+        long[] head = fastHead;
         long sentinel = (long)(srcOff - WINDOW_SIZE - 1) & 0xFFFFFFFFL;
         Arrays.fill(head, sentinel);
 
@@ -892,5 +916,4 @@ public final class LZ4Java {
         }
     }
 
-    private LZ4Java() {}
 }
