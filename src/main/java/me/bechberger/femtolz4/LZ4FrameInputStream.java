@@ -114,8 +114,12 @@ public final class LZ4FrameInputStream extends InputStream {
     private boolean tryNextFrame() throws IOException {
         while (true) {
             int b0 = in.read();
-            if (b0 < 0) { eof = true; return false; }
-            int magic = b0 | (readByte() << 8) | (readByte() << 16) | (readByte() << 24);
+            if (b0 < 0) { eof = true; return false; } // clean EOF between frames
+            int b1 = in.read();
+            int b2 = in.read();
+            int b3 = in.read();
+            if (b1 < 0 || b2 < 0 || b3 < 0) { eof = true; return false; } // truncated magic = EOF
+            int magic = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
             if (magic == MAGIC) {
                 readFrameHeaderAfterMagic();
                 int sizeField = readLE32();

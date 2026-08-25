@@ -173,6 +173,18 @@ class IssueRegressionTest {
             new LZ4FrameInputStream(new ByteArrayInputStream(baos.toByteArray())).readAllBytes());
     }
 
+    // ── Single frame followed by clean EOF must not throw ────────────────────
+    // Bug: tryNextFrame() called readByte() after clean EOF, throwing
+    // LZ4Exception("unexpected EOF") instead of treating it as end-of-stream.
+
+    @Test void singleFrameFollowedByCleanEofDoesNotThrow() throws Exception {
+        byte[] src = "hello".getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = frameCompress(src);
+        // Wrap in a stream that ends exactly at the frame boundary (no extra bytes)
+        assertArrayEquals(src,
+            new LZ4FrameInputStream(new ByteArrayInputStream(compressed)).readAllBytes());
+    }
+
     // ── Interop: frames produced by the lz4 CLI ──────────────────────────────
     // The default lz4 CLI (v1.10) enables content checksum (FLG bit 2).
     // --content-size adds 8 bytes of content size (FLG bit 3).
