@@ -125,6 +125,8 @@ public final class LZ4FrameOutputStream extends OutputStream {
     @Override
     public void flush() throws IOException {
         ensureOpen();
+        ensureHeader();
+        if (inputPos > 0) flushBlock();
         out.flush();
     }
 

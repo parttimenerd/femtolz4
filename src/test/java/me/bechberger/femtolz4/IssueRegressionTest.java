@@ -158,6 +158,27 @@ class IssueRegressionTest {
             () -> LZ4.decompress(comp, 0, comp.length, new byte[100], 0, 100));
     }
 
+    // ── flush() materializes partial block to underlying stream ──────────────
+    // condensed-data relies on flush() pushing buffered bytes so that
+    // estimateSize() reflects real on-disk bytes mid-stream.
+
+    @Test void flushMaterializesPartialBlock() throws Exception {
+        var baos = new ByteArrayOutputStream();
+        var lz4  = new LZ4FrameOutputStream(baos);
+        // Write less than one block — stays buffered without flush
+        lz4.write("hello world".getBytes(StandardCharsets.UTF_8));
+        int beforeFlush = baos.size();
+        lz4.flush();
+        int afterFlush = baos.size();
+        assertTrue(afterFlush > beforeFlush,
+            "flush() must push partial block to underlying stream; before=" + beforeFlush + " after=" + afterFlush);
+        // The stream must still be readable after flush (not terminated)
+        lz4.write("more data".getBytes(StandardCharsets.UTF_8));
+        lz4.close();
+        byte[] result = new LZ4FrameInputStream(new ByteArrayInputStream(baos.toByteArray())).readAllBytes();
+        assertArrayEquals("hello worldmore data".getBytes(StandardCharsets.UTF_8), result);
+    }
+
     // ── Concatenated frames ───────────────────────────────────────────────────
 
     @Test void concatenatedFrames() throws Exception {
