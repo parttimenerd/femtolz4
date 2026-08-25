@@ -80,7 +80,18 @@ public final class LZ4FrameInputStream extends InputStream {
     @Override
     public int read(byte[] b, int off, int len) throws IOException {
         if (len == 0) return 0;
-        if (!refill()) return -1;
+        while (blockPos >= blockLen) {
+            if (eof) return -1;
+            /* Direct path: when the caller asks for at least a full block, decode
+               straight into the caller's buffer and skip the blockBuf round-trip —
+               saves one full copy of all decompressed data on large reads. */
+            if (blockIndependent && len >= blockMaxSize) {
+                long sizeField = readNextSizeField();
+                if (sizeField < 0) return -1;
+                return readBlockDirect((int) sizeField, b, off);
+            }
+            if (!refill()) return -1;
+        }
         int n = Math.min(len, blockLen - blockPos);
         System.arraycopy(blockBuf, blockPos, b, off, n);
         blockPos += n;
@@ -100,44 +111,58 @@ public final class LZ4FrameInputStream extends InputStream {
     private boolean refill() throws IOException {
         if (eof) return false;
         while (blockPos >= blockLen) {
-            if (!readNextBlock()) return false;
+            long sizeField = readNextSizeField();
+            if (sizeField < 0) return false;
+            readBlock((int) sizeField);
         }
         return true;
     }
 
     /**
-     * Reads and decompresses the next block.
-     * On end-mark, looks for another concatenated frame.
-     * Returns false on true EOF.
+     * Reads the next nonzero block-size field, transparently handling end marks,
+     * content-checksum verification, empty frames, concatenated frames and
+     * skippable frames — without reading any block payload.
+     *
+     * @return the size field zero-extended as a long, or -1 on true EOF
+     *         (sets {@link #eof}). A long is used because a raw block's
+     *         size field has bit 31 set and would otherwise be negative.
      */
-    private boolean readNextBlock() throws IOException {
-        int b0 = in.read();
-        if (b0 < 0) { eof = true; return false; } // EOF between frames
-        int sizeField = b0 | (readByte() << 8) | (readByte() << 16) | (readByte() << 24);
-
-        if (sizeField == 0) {
-            // end mark
-            if (hasContentChecksum) verifyContentChecksum();
-            if (readSingleFrame) { eof = true; return false; }
-            return tryNextFrame();
+    private long readNextSizeField() throws IOException {
+        while (true) {
+            int b0 = in.read();
+            if (b0 < 0) { eof = true; return -1; } // EOF between frames
+            int sizeField = b0 | (readByte() << 8) | (readByte() << 16) | (readByte() << 24);
+            if (sizeField == 0) {
+                // end mark
+                if (hasContentChecksum) verifyContentChecksum();
+                if (readSingleFrame) { eof = true; return -1; }
+                int next = tryNextFrameHeader();
+                if (eof) return -1;
+                if (next != 0) return next & 0xFFFFFFFFL;
+                continue;
+            }
+            return sizeField & 0xFFFFFFFFL;
         }
-
-        return readBlock(sizeField);
     }
 
     /**
      * After an end-mark (and its optional content checksum), look for a
-     * concatenated LZ4 frame or a skippable frame. Returns false on true EOF.
-     * Never called when readSingleFrame=true.
+     * concatenated LZ4 frame or a skippable frame and parse up to (but excluding)
+     * its first block payload.
+     *
+     * @return the first block's nonzero size field, or 0 to signal "resume reading
+     *         size fields" (clean EOF sets {@link #eof} and also returns 0;
+     *         callers re-check {@link #eof} or rely on the next
+     *         {@link #readNextSizeField()} call returning -1)
      */
-    private boolean tryNextFrame() throws IOException {
+    private int tryNextFrameHeader() throws IOException {
         while (true) {
             int b0 = in.read();
-            if (b0 < 0) { eof = true; return false; } // clean EOF between frames
+            if (b0 < 0) { eof = true; return 0; } // clean EOF between frames
             int b1 = in.read();
             int b2 = in.read();
             int b3 = in.read();
-            if (b1 < 0 || b2 < 0 || b3 < 0) { eof = true; return false; } // truncated magic = EOF
+            if (b1 < 0 || b2 < 0 || b3 < 0) { eof = true; return 0; } // truncated magic = EOF
             int magic = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
             if (magic == MAGIC) {
                 readFrameHeaderAfterMagic();
@@ -147,7 +172,7 @@ public final class LZ4FrameInputStream extends InputStream {
                     if (hasContentChecksum) verifyContentChecksum();
                     continue;
                 }
-                return readBlock(sizeField);
+                return sizeField;
             }
             if ((magic & 0xFFFFFFF0) == 0x184D2A50) {
                 // skippable frame: skip size + data, then loop
@@ -200,6 +225,47 @@ public final class LZ4FrameInputStream extends InputStream {
         if (hasContentChecksum) contentHasher.update(blockBuf, 0, blockLen);
         blockPos = 0;
         return true;
+    }
+
+    /**
+     * Reads and decompresses one block straight into the caller's buffer,
+     * avoiding the blockBuf round-trip. Preconditions (caller-checked):
+     * {@code blockIndependent && len >= blockMaxSize}, so the block always fits.
+     *
+     * @param b   caller's buffer
+     * @param off write offset in {@code b}; at least {@code blockMaxSize} bytes remain
+     * @return number of decompressed bytes written
+     */
+    private int readBlockDirect(int sizeField, byte[] b, int off) throws IOException {
+        boolean isRaw      = (sizeField & 0x80000000) != 0;
+        int     payloadLen = sizeField & 0x7FFFFFFF;
+
+        if (payloadLen > blockMaxSize)
+            throw new LZ4Exception("block size " + payloadLen + " exceeds max " + blockMaxSize);
+
+        if (isRaw) {
+            readFully(b, off, payloadLen);
+            if (hasBlockChecksum) {
+                int expected = readLE32();
+                int actual = XXHash32.hash(b, off, payloadLen);
+                if (expected != actual)
+                    throw new LZ4Exception("block checksum mismatch");
+            }
+            if (hasContentChecksum) contentHasher.update(b, off, payloadLen);
+            return payloadLen;
+        }
+
+        if (compBuf.length < payloadLen) compBuf = new byte[payloadLen];
+        readFully(compBuf, payloadLen);
+        if (hasBlockChecksum) {
+            int expected = readLE32();
+            int actual = XXHash32.hash(compBuf, 0, payloadLen);
+            if (expected != actual)
+                throw new LZ4Exception("block checksum mismatch");
+        }
+        int n = LZ4.decompress(compBuf, 0, payloadLen, b, off, blockMaxSize);
+        if (hasContentChecksum) contentHasher.update(b, off, n);
+        return n;
     }
 
     private void readFrameHeader() throws IOException {
@@ -309,9 +375,13 @@ public final class LZ4FrameInputStream extends InputStream {
     }
 
     private void readFully(byte[] buf, int len) throws IOException {
-        int off = 0;
-        while (off < len) {
-            int n = in.read(buf, off, len - off);
+        readFully(buf, 0, len);
+    }
+
+    private void readFully(byte[] buf, int off, int len) throws IOException {
+        int end = off + len;
+        while (off < end) {
+            int n = in.read(buf, off, end - off);
             if (n < 0) throw new LZ4Exception("unexpected EOF in block payload");
             off += n;
         }
