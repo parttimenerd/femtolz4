@@ -15,12 +15,18 @@ def load(p):
                 continue
             if len(r) <= stat_col:
                 continue
-            op, corpus, chain, impl, mbps = r[1], r[2], int(r[4]), r[5], float(r[stat_col])
+            op, corpus, chain, impl = r[1], r[2], int(r[4]), r[5]
+            if opfilter == "ratio":
+                if op != "compress":
+                    continue
+                val = float(r[8])  # compression ratio src/compressed
+            else:
+                val = float(r[stat_col])  # throughput MB/s
             key = (corpus, chain, impl, op)
             # multi-pass files: keep the best per cell (max stat is ambient-noise robust)
-            if stat_col == 10 and key in rows:
-                mbps = max(mbps, rows[key])
-            rows[key] = mbps
+            if stat_col == 10 and opfilter != "ratio" and key in rows:
+                val = max(val, rows[key])
+            rows[key] = val
     return rows
 
 b, n = load(base_f), load(new_f)
@@ -29,12 +35,16 @@ print(f"{'corpus':<18} {'chain':>5} {'impl':<6} {'op':<10} {'base':>8} {'new':>8
 tot = 0.0
 cnt = 0
 for k in keys:
-    if opfilter and k[3] != opfilter:
+    if opfilter and opfilter != "ratio" and k[3] != opfilter:
         continue
     d = (n[k] - b[k]) / b[k] * 100
     tot += d
     cnt += 1
     flag = " <<<" if abs(d) >= 3 else ""
-    print(f"{k[0]:<18} {k[1]:>5} {k[2]:<6} {k[3]:<10} {b[k]:>8.0f} {n[k]:>8.0f} {d:>+6.1f}%{flag}")
+    if opfilter == "ratio":
+        flag = " <<<" if abs(d) >= 0.05 else ""
+        print(f"{k[0]:<18} {k[1]:>5} {k[2]:<6} {k[3]:<10} {b[k]:>9.5f} {n[k]:>9.5f} {d:>+7.3f}%{flag}")
+    else:
+        print(f"{k[0]:<18} {k[1]:>5} {k[2]:<6} {k[3]:<10} {b[k]:>8.0f} {n[k]:>8.0f} {d:>+6.1f}%{flag}")
 if cnt:
     print(f"mean delta: {tot/cnt:+.1f}%  ({cnt} cells)")

@@ -59,12 +59,75 @@ HA_gc 923→916 (0%). Modest but structural; helps more with real sinks (cache).
 ### E2: decompressJavaImpl — wild-copy arm for short matches
 `offset ≥ 8 && matchLen ≤ 16 && op+16 ≤ dstEnd` → two fixed 8-byte overlapping moves
 instead of arraycopy dispatch. (Java block decode only.)
-First noisy A/B: rle +24%, mixed +8%, json ±9% inconclusive — awaiting interleaved rerun.
+Interleaved A/B (max of 18 trials, 7 corpora): **decode json +21.0%, rle +32.2%,
+offset4 +8.5%, offset16 +4.4%, text/mixed/random ±0; compress ±0.** Kept + committed.
+
+### E3: chain-walk 4-byte candidate prune at ±(len-3) — REJECTED
+Replaced the 1-byte `src[sv+bestLen]` prune with a 4-byte VarHandle read at
+`±(bestLen-3)` in the chain≥3 walk (+2 lazy/chain2 sites).
+Interleaved A/B (max): json@2 -9%, mixed@2 -11%, offset4@2 -15%, chain 8/256 -3..-5%,
+json@8/256 +2%. mean -5.1%. The v4-in-tail fingerprint filter already rejects most
+candidates; the extra memory access only pays off on sparse-match corpora. Reverted.
+
+### E4: decode literal runs ≤ 16 via one unconditional 16-byte wild copy
+Replaced the 1/2/3-byte specials + 4-32B ladder in the decode main loop with two fixed
+8-byte moves (overshoot within dstEnd/srcEnd margins). >16 → arraycopy.
+Interleaved A/B: decode +0.4% max / +0.2% median (json +1.9%, offset4 +1.1%, rest ~0);
+compress untouched. Neutral-to-positive, simpler code. Kept.
+
+### E5: XXHash32.readInt via VarHandle — kept (affects block/content checksum paths)
+
+### E6: copyLiterals ≤16 wild copy arm (compress side) — kept + committed (34e816a, with E4)
+Second full A/B (e6b) after thermal settling: compress mean **-2.5%**
+(text@1 -3.9%, random@8 -16.1%, mixed@8 -5.6%; only consistent regression
+mixed@1 +4-5%, reproduced identically in e6p — accepted given net win).
+Decode vs HEAD: text -49%, mixed -39% (includes E4 which was still
+uncommitted at that point).
+
+### Harness: thermal drift guard
+A1-vs-A2 (identical jars, start vs end of a session) showed compress +20%
+mean drift — Apple Silicon frequency ramp from cold start; decode stable
+(+0.7%). ab_pair_run.sh now prepends a discarded burn-in pass so all
+measured passes run at steady-state clocks. The A-B-B-A pass averaging
+cancels roughly-linear residual drift.
+
+### E7: 16-bit LE VarHandle for match offsets — measuring (in e789)
+SHORT_LE.set(dst, op, (short) matchDist) replaces paired byte stores at all 6
+compress emit sites; SHORT_LE.get+mask replaces the paired byte reads at the
+decode offset site. Same byte layout, no guard changes needed.
+
+### E8: drop the per-call 32 KiB hash-table fill in compressFast (chain=1) — measuring
+JFR showed Arrays.fill(long[],long) = 10.5% of samples compressing json-10m
+at chain=1 (table is allocated per LZ4Java instance; static helpers create one
+per call, so JVM zero-fill + explicit sentinel fill both ran per 10 MB block).
+Fill removed; candidate checks hardened instead: v4 fingerprint, sv >= srcOff,
+1 <= pos-sv <= 65535, and INT_LE re-read of the 4 bytes at sv (extendMatch
+trusts the first 4 bytes from the fingerprint). Stale slots can then only
+produce *real* in-window matches.
+BUG FOUND + FIXED before bench: my first "unsigned" window test used
+`((pos-sv-1) >>> 0) < 65535` — `>>> 0` is a no-op for int, so signed -1 passed
+and 12 zero bytes compressed to offset=0 (invalid stream). Caught by
+CorpusBench rle-20m crashing on decode + a 12-byte minimal repro (Dump/MIN in
+/tmp/rt). Replaced with explicit `pos - sv >= 1 && pos - sv < WINDOW_SIZE`.
+Verified: LZ4.compressorJava(1/8) instance reuse stress over 2000 mixed blocks
+(REUSE_OK), 800 static roundtrips (ALL_ROUNDTRIPS_OK), full mvn suite (exit 0).
+
+### E9: decode copy overhaul — measuring (in e789)
+JFR on text decode: copyMatch = 80% of samples.
+ E9a: decode dispatch gains a 32-byte wild-copy arm for offset >= 16, len <= 32
+ (two 16-byte shots, provably no store->load forwarding chain).
+ E9b: copyMatch offsets 3..7 and >= 8 unified into prime-offset + geometric
+ arraycopy doubling (phase-safe: copy lengths stay multiples of offset until
+ the final partial step; log2 steps, vectorized intrinsic).
+ Offsets 1/2/4 keep their fill/pattern-store special cases (pure stores).
+ E9c: copyLiterals > 16 (and guard-fail tails) -> plain arraycopy, deleting the
+ LONG_LE 17..64 ladder (random@1 had 22.4% of samples inside Longs.get from
+ those tiers). Net ~-30 lines.
 
 ## Queue
 
-- E3: chain-walk candidate pruning with 4-byte read at sv+bestLen-3 (chain ≥ 3, ~50% time)
-- E4: re-profile decode after E2; consider short literal wildcard copy improvements
-- E5: XXHash32 VarHandle readInt (block/content checksum frames)
-- E6: LZ4FrameOutputStream writeLE32 batching
+- E10: extendMatch deep-dive (97% of text@1 compress) — inlined? 16B loop shape?
+- E11: re-profile decode post-E9; verify copyMatch share collapsed
+- E12: (stretch) NEON 16B match extension for darwin-aarch64 C encoder
+- E13: adaptive hash size for chain path by block size
 
