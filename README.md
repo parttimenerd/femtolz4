@@ -18,7 +18,7 @@ _This is a prototype of the SapMachine team._
 <dependency>
   <groupId>me.bechberger</groupId>
   <artifactId>femtolz4</artifactId>
-  <version>0.1.0</version>
+  <version>0.2.0</version>
 </dependency>
 ```
 
@@ -69,7 +69,7 @@ new LZ4FrameOutputStream(out, LZ4.compressHigh())
 |-------|-------|-------|
 | 1 (default) | fastest | good |
 | 5 | balanced | better |
-| 9 | slower | best |
+| 9 (`LEVEL_MAX`) | slower | best |
 
 **Block sizes:** 64 KiB, 256 KiB, 1 MiB (default), 4 MiB.
 Smaller blocks reduce peak memory use; larger blocks improve ratio on
@@ -82,8 +82,8 @@ compressed data in a custom binary format where you store the original size your
 
 ```java
 // Compress a byte array
-byte[] compressed = LZ4.compress(data);          // fastest
-byte[] compressed = LZ4.compressHigh(data);      // best ratio
+byte[] compressed = LZ4.compress(data);          // fastest (level 1)
+byte[] compressed = LZ4.compressHigh(data);      // best ratio (level 9)
 
 // Decompress — you must know the original (uncompressed) size
 byte[] original = LZ4.decompress(compressed, originalSize);
@@ -95,17 +95,13 @@ int compressedLen = LZ4.compress(src, srcOff, srcLen, dst, dstOff, maxChain);
 int maxLen = LZ4.maxCompressedLength(srcLen);
 ```
 
-`LZ4.compressHigh(int level)` accepts a level from 1 to 256 (search chain depth).
-The zero-argument form uses the maximum (256). Higher values improve ratio at the
-cost of compression speed; decompression speed is unaffected.
-
 ### Compressor and Decompressor handles
 
-`LZ4.compress()` and `LZ4.compressHigh()` return a `LZ4.Compressor` handle that
-can be passed to `LZ4FrameOutputStream` or called directly:
+`LZ4.compressor(int level)` returns a reusable `LZ4.Compressor` handle.
+Reusing the same instance across calls avoids re-allocating hash tables.
 
 ```java
-LZ4.Compressor c = LZ4.compressHigh(5);
+LZ4.Compressor c = LZ4.compressor(LZ4.LEVEL_DEFAULT); // level 9
 
 // Use with frame stream
 try (var out = new LZ4FrameOutputStream(sink, c)) { ... }
@@ -114,10 +110,31 @@ try (var out = new LZ4FrameOutputStream(sink, c)) { ... }
 int n = c.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
 ```
 
-Similarly, `LZ4.decompress()` returns a `LZ4.Decompressor`:
+**Level constants:**
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `LEVEL_FAST` | 1 | Fastest compression (chain=1) |
+| `LEVEL_DEFAULT` | 9 | Default / best ratio (chain=256) |
+| `LEVEL_MAX` | 9 | Same as `LEVEL_DEFAULT`; maximum accepted level |
+
+**Level → chain depth mapping** (matches the reference `lz4` CLI):
+
+| Level | Chain depth |
+|-------|-------------|
+| 1–2 | 1 (fast) |
+| 3 | 4 |
+| 4 | 8 |
+| 5 | 16 |
+| 6 | 32 |
+| 7 | 64 |
+| 8 | 128 |
+| 9 | 256 |
+
+Similarly, `LZ4.decompress()` / `LZ4.decompressor()` return a `LZ4.Decompressor`:
 
 ```java
-LZ4.Decompressor d = LZ4.decompress();
+LZ4.Decompressor d = LZ4.decompressor();
 int written = d.decompress(src, srcOff, dst, dstOff, originalLen);
 ```
 
@@ -151,6 +168,15 @@ Frame feature support:
 | Content checksum | yes | no |
 | Skippable frames | yes | no |
 
+## Limitations
+
+- **lz4opt (levels 10–12) is not implemented.** The reference `lz4` CLI offers a
+  bounded-DP optimal parser at levels 10–12. Benchmarking on real JFR and corpus
+  data showed only 1–2% ratio improvement over level 9 at 3–80× slower compression
+  speed — not a worthwhile tradeoff for an LZ4 implementation where the format itself
+  limits the compression ratio ceiling. Level 9 (chain=256) is the practical maximum
+  for this library.
+
 ## Relationship to lz4-java
 
 [lz4-java](https://github.com/lz4/lz4-java) (and its fork
@@ -180,7 +206,7 @@ Requirements: JDK 17+, Maven 3.6+.
 mvn package
 ```
 
-The JAR lands at `target/femtolz4-0.1.0.jar`.
+The JAR lands at `target/femtolz4-0.1.3.jar`.
 
 ### Native libraries
 
@@ -207,9 +233,6 @@ mvn test -Pfuzz             # deep-fuzz suite: 50× more jqwik tries, adds deep-
 mvn test -Dtest.full=true   # full suite: also runs slow/exhaustive tests
 mvn test -Dnative.skip=true # skip native build, exercise the pure-Java path only
 ```
-
-The test suite has 559 tests across nine test classes and uses
-[jqwik](https://jqwik.net) for property-based fuzzing.
 
 **`RobustnessTest`** — the decompressor must never crash, only throw `LZ4Exception`:
 - every possible truncation of a valid compressed block or frame stream,
