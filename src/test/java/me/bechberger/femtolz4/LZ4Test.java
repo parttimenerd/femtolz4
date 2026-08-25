@@ -132,12 +132,11 @@ class LZ4Test {
         assertFrameRoundTrip(src, LZ4FrameOutputStream.DEFAULT_BLOCK_SIZE, level);
     }
 
-    @Test void frameInvalidLevelRejected() {
+    @Test void frameOutOfRangeLevelClamped() {
+        // Levels outside [LEVEL_FAST, LEVEL_MAX] are clamped, not rejected
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        assertThrows(IllegalArgumentException.class,
-            () -> new LZ4FrameOutputStream(baos, 0));
-        assertThrows(IllegalArgumentException.class,
-            () -> new LZ4FrameOutputStream(baos, 10));
+        assertDoesNotThrow(() -> new LZ4FrameOutputStream(baos, 0));
+        assertDoesNotThrow(() -> new LZ4FrameOutputStream(baos, LZ4.LEVEL_MAX + 1));
     }
 
     @Test void frameInvalidBlockSizeRejected() {

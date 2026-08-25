@@ -16,14 +16,14 @@ import static org.junit.jupiter.api.Assertions.*;
  * {@link LZ4Test}, {@link RobustnessTest}, or {@link IssueRegressionTest}.
  *
  * Areas covered:
- *  - LZ4.Compressor / LZ4.Decompressor functional interfaces
- *  - LZ4 block API with non-zero srcOff / dstOff
+ *  - LZ4.compressor(int) / LZ4.compressorJava(int) factory methods
+ *  - LZ4.LEVEL_FAST / LEVEL_DEFAULT / LEVEL_MAX constants
  *  - LZ4.compress(byte[]) / LZ4.compressHigh(byte[]) / LZ4.decompress(byte[], int)
  *  - LZ4.maxCompressedLength contract
  *  - LZ4.isNativeAvailable()
  *  - LZ4.decompress() Decompressor functional interface
  *  - LZ4.compressJava() / decompressJava() (pure-Java path)
- *  - LZ4.HC_MIN_LEVEL / HC_MAX_LEVEL constants
+ *  - LZ4.HC_MIN_LEVEL / HC_MAX_LEVEL constants (deprecated)
  *  - LZ4FrameOutputStream(OutputStream) default constructor
  *  - LZ4FrameOutputStream(OutputStream, LZ4.Compressor)
  *  - LZ4FrameOutputStream level-to-ratio monotonicity
@@ -358,7 +358,7 @@ class ApiCoverageTest {
         // Higher levels should produce <= output for highly compressible data
         byte[] src = "aaaaaaa".repeat(50000).getBytes(StandardCharsets.UTF_8);
         int prevLen = Integer.MAX_VALUE;
-        for (int level = 1; level <= LZ4FrameOutputStream.MAX_LEVEL; level++) {
+        for (int level = 1; level <= LZ4.LEVEL_MAX; level++) {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, level)) {
                 lz4.write(src);
@@ -529,6 +529,61 @@ class ApiCoverageTest {
         byte[] src = "high frame".repeat(10000).getBytes(StandardCharsets.UTF_8);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, LZ4.compressHigh())) {
+            lz4.write(src);
+        }
+        assertArrayEquals(src, LZ4Test.frameDecompress(baos.toByteArray()));
+    }
+
+    // ── New compressor(level) API ────────────────────────────────────────────
+
+    @Test void levelConstantsExist() {
+        assertEquals(1,  LZ4.LEVEL_FAST);
+        assertEquals(9,  LZ4.LEVEL_DEFAULT);
+        assertEquals(12, LZ4.LEVEL_MAX);
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9, 12})
+    void compressorLevelRoundTrip(int level) {
+        LZ4.Compressor c = LZ4.compressor(level);
+        byte[] src = "hello world!".repeat(1000).getBytes(StandardCharsets.UTF_8);
+        byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
+        int n = c.compress(src, 0, src.length, dst, 0, dst.length);
+        assertTrue(n > 0);
+        assertArrayEquals(src, LZ4.decompress(java.util.Arrays.copyOf(dst, n), src.length));
+    }
+
+    @ParameterizedTest @ValueSource(ints = {1, 3, 5, 9, 12})
+    void compressorJavaLevelRoundTrip(int level) {
+        LZ4.Compressor c = LZ4.compressorJava(level);
+        byte[] src = "hello world!".repeat(1000).getBytes(StandardCharsets.UTF_8);
+        byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
+        int n = c.compress(src, 0, src.length, dst, 0, dst.length);
+        assertTrue(n > 0);
+        assertArrayEquals(src, LZ4.decompress(java.util.Arrays.copyOf(dst, n), src.length));
+    }
+
+    @Test void compressorLevelDefaultMatchesLevel9() {
+        // LEVEL_DEFAULT should produce a valid, decompressible result
+        LZ4.Compressor c = LZ4.compressor(LZ4.LEVEL_DEFAULT);
+        byte[] src = "default level".repeat(500).getBytes(StandardCharsets.UTF_8);
+        byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
+        int n = c.compress(src, 0, src.length, dst, 0, dst.length);
+        assertArrayEquals(src, LZ4.decompress(java.util.Arrays.copyOf(dst, n), src.length));
+    }
+
+    @Test void compressorLevelMaxClampedToLevel9Behaviour() {
+        // LEVEL_MAX (12) has no opt-parser; must still round-trip correctly
+        LZ4.Compressor c = LZ4.compressor(LZ4.LEVEL_MAX);
+        byte[] src = "max level".repeat(500).getBytes(StandardCharsets.UTF_8);
+        byte[] dst = new byte[LZ4.maxCompressedLength(src.length)];
+        int n = c.compress(src, 0, src.length, dst, 0, dst.length);
+        assertArrayEquals(src, LZ4.decompress(java.util.Arrays.copyOf(dst, n), src.length));
+    }
+
+    @Test void frameOutputStreamAcceptsLevelMax() throws IOException {
+        byte[] src = "level max frame".repeat(200).getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream lz4 = new LZ4FrameOutputStream(baos, LZ4.LEVEL_MAX)) {
             lz4.write(src);
         }
         assertArrayEquals(src, LZ4Test.frameDecompress(baos.toByteArray()));

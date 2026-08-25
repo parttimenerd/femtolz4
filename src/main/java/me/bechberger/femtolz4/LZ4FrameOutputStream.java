@@ -29,21 +29,33 @@ import java.io.OutputStream;
 public final class LZ4FrameOutputStream extends OutputStream {
 
     private static final int[] BLOCK_SIZES = {64 * 1024, 256 * 1024, 1024 * 1024, 4 * 1024 * 1024};
-    private static final int[] LEVEL_TO_MAX_CHAIN = {1, 2, 4, 6, 8, 12, 16, 32, 64};
 
     /** Default block size: 4 MiB. */
     public static final int DEFAULT_BLOCK_SIZE = 4 << 20;
 
-    /** Minimum public compression level. */
-    public static final int MIN_LEVEL = 1;
+    /**
+     * Minimum compression level accepted by {@link #LZ4FrameOutputStream(OutputStream, int)}.
+     * @deprecated Use {@link LZ4#LEVEL_FAST}.
+     */
+    @Deprecated public static final int MIN_LEVEL = LZ4.LEVEL_FAST;
 
-    /** Maximum public compression level. */
-    public static final int MAX_LEVEL = 9;
+    /**
+     * Maximum compression level accepted by {@link #LZ4FrameOutputStream(OutputStream, int)}.
+     * @deprecated Use {@link LZ4#LEVEL_MAX}.
+     */
+    @Deprecated public static final int MAX_LEVEL = LZ4.LEVEL_MAX;
 
-    /** Fastest compression. Equivalent to an internal maxChain of 1. */
-    public static final int LEVEL_FAST   = MIN_LEVEL;
-    /** Balanced compression. Equivalent to an internal maxChain of 8. */
-    public static final int LEVEL_NORMAL = 5;
+    /**
+     * Fastest compression level.
+     * @deprecated Use {@link LZ4#LEVEL_FAST}.
+     */
+    @Deprecated public static final int LEVEL_FAST   = LZ4.LEVEL_FAST;
+
+    /**
+     * Balanced compression level.
+     * @deprecated Use {@link LZ4#LEVEL_DEFAULT}.
+     */
+    @Deprecated public static final int LEVEL_NORMAL = LZ4.LEVEL_DEFAULT;
 
     private final OutputStream out;
     private final int blockSize;
@@ -76,11 +88,11 @@ public final class LZ4FrameOutputStream extends OutputStream {
      * Wraps {@code out} with the given block size and compression level.
      *
      * @param blockSize bytes per block; must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB
-     * @param level compression level from {@value #MIN_LEVEL} (fastest) to
-     *              {@value #MAX_LEVEL} (best ratio)
+     * @param level compression level from {@link LZ4#LEVEL_FAST} to {@link LZ4#LEVEL_MAX};
+     *              values outside this range are clamped
      */
     public LZ4FrameOutputStream(OutputStream out, int blockSize, int level) {
-        this(out, blockSize, LZ4.compressHigh(maxChainForLevel(level)));
+        this(out, blockSize, LZ4.compressor(level));
     }
 
     /** Wraps {@code out} with the default block size and the given compression level. */
@@ -90,7 +102,7 @@ public final class LZ4FrameOutputStream extends OutputStream {
 
     /** Wraps {@code out} with 4 MiB blocks and fastest compression. */
     public LZ4FrameOutputStream(OutputStream out) {
-        this(out, DEFAULT_BLOCK_SIZE, LEVEL_FAST);
+        this(out, DEFAULT_BLOCK_SIZE, LZ4.LEVEL_FAST);
     }
 
     @Override
@@ -194,14 +206,6 @@ public final class LZ4FrameOutputStream extends OutputStream {
         if (blockSizeIndex(blockSize) >= 0) return blockSize;
         throw new IllegalArgumentException(
                 "blockSize must be 64 KiB, 256 KiB, 1 MiB, or 4 MiB, got: " + blockSize);
-    }
-
-    private static int maxChainForLevel(int level) {
-        if (level >= MIN_LEVEL && level <= MAX_LEVEL) {
-            return LEVEL_TO_MAX_CHAIN[level - MIN_LEVEL];
-        }
-        throw new IllegalArgumentException(
-                "level must be between " + MIN_LEVEL + " and " + MAX_LEVEL + ", got: " + level);
     }
 
     private static int blockSizeIndex(int blockSize) {

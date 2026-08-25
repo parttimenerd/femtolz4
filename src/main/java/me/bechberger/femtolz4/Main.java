@@ -54,9 +54,13 @@ public final class Main {
     }
 
     private static int parseLevel(String[] args) {
-        if (args.length < 4) return LZ4FrameOutputStream.LEVEL_FAST;
+        if (args.length < 4) return LZ4.LEVEL_FAST;
         try {
-            return Integer.parseInt(args[3]);
+            int level = Integer.parseInt(args[3]);
+            if (level < LZ4.LEVEL_FAST || level > LZ4.LEVEL_MAX)
+                throw new IllegalArgumentException(
+                    "level must be between " + LZ4.LEVEL_FAST + " and " + LZ4.LEVEL_MAX + ", got: " + level);
+            return level;
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException("invalid level: " + args[3]);
         }

@@ -58,18 +58,21 @@ class LLMEdgeCaseTest {
             () -> new LZ4FrameOutputStream(OutputStream.nullOutputStream(), bad, 1));
     }
 
-    @Test void levelZeroThrows() {
-        assertThrows(IllegalArgumentException.class,
+    @Test void levelZeroClampsToFast() throws IOException {
+        // Level 0 is below LEVEL_FAST; compressor(level) clamps silently
+        assertDoesNotThrow(
             () -> new LZ4FrameOutputStream(OutputStream.nullOutputStream(), 0));
     }
 
-    @Test void levelTooHighThrows() {
-        assertThrows(IllegalArgumentException.class,
-            () -> new LZ4FrameOutputStream(OutputStream.nullOutputStream(), LZ4FrameOutputStream.MAX_LEVEL + 1));
+    @Test void levelAboveMaxClampsToMax() throws IOException {
+        // Level > LEVEL_MAX is clamped silently to LEVEL_MAX behaviour
+        assertDoesNotThrow(
+            () -> new LZ4FrameOutputStream(OutputStream.nullOutputStream(), LZ4.LEVEL_MAX + 1));
     }
 
-    @Test void levelNegativeThrows() {
-        assertThrows(IllegalArgumentException.class,
+    @Test void levelNegativeClampsToFast() throws IOException {
+        // Negative levels are clamped silently to LEVEL_FAST
+        assertDoesNotThrow(
             () -> new LZ4FrameOutputStream(OutputStream.nullOutputStream(), -1));
     }
 
@@ -459,7 +462,7 @@ class LLMEdgeCaseTest {
 
     @Test void allValidLevelsRoundTrip() throws IOException {
         byte[] data = randomBytes(10_000, 6);
-        for (int level = LZ4FrameOutputStream.MIN_LEVEL; level <= LZ4FrameOutputStream.MAX_LEVEL; level++) {
+        for (int level = LZ4.LEVEL_FAST; level <= LZ4.LEVEL_MAX; level++) {
             byte[] got = frameRoundTrip(data, 64 * 1024, level);
             assertArrayEquals(data, got, "level=" + level);
         }

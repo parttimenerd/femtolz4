@@ -62,16 +62,18 @@ public final class LZ4Java {
     }
 
     /** Equivalent to lz4-java's {@code factory.fastCompressor()}. */
-    public static LZ4.Compressor fastCompressor() { return LZ4.compress(); }
+    public static LZ4.Compressor fastCompressor() { return LZ4.compressor(LZ4.LEVEL_FAST); }
 
     /** Equivalent to lz4-java's {@code factory.highCompressor()}. */
-    public static LZ4.Compressor highCompressor() { return LZ4.compressHigh(); }
+    public static LZ4.Compressor highCompressor() { return LZ4.compressor(LZ4.LEVEL_DEFAULT); }
 
     /**
      * Equivalent to lz4-java's {@code factory.highCompressor(level)}.
      *
      * @param level HC level from {@value LZ4#HC_MIN_LEVEL} to {@value LZ4#HC_MAX_LEVEL}
+     * @deprecated Use {@link LZ4#compressor(int)}.
      */
+    @Deprecated
     public static LZ4.Compressor highCompressor(int level) { return LZ4.compressHigh(level); }
 
     /** Equivalent to lz4-java's {@code factory.fastDecompressor()}. */
