@@ -742,31 +742,17 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
             if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
             int iLitLen = (int) litLen;
-            /* Fast paths for the common small literal lengths (JFR data: 95%+ are 1-3 bytes). */
-            if (iLitLen == 1) {
-                dst[op++] = src[ip++];
-            } else if (iLitLen == 2) {
-                dst[op] = src[ip]; dst[op + 1] = src[ip + 1]; op += 2; ip += 2;
-            } else if (iLitLen == 3) {
-                dst[op] = src[ip]; dst[op + 1] = src[ip + 1]; dst[op + 2] = src[ip + 2];
-                op += 3; ip += 3;
+            if (litLen <= 16 && op + 16 <= dstEnd && ip + 16 <= srcEnd) {
+                /* Wild copy: two fixed 8-byte moves cover any 0-16 byte literal run
+                   without per-length branching (JFR data: 95%+ of runs are <= 16 bytes).
+                   Overshoot bytes stay within dstEnd and are overwritten by the
+                   following sequence; the tail margin keeps reads within srcEnd. */
+                LONG_LE.set(dst, op,     (long) LONG_LE.get(src, ip));
+                LONG_LE.set(dst, op + 8, (long) LONG_LE.get(src, ip + 8));
+                ip += iLitLen;
+                op += iLitLen;
             } else if (iLitLen != 0) {
-                if (iLitLen <= 32) {
-                    if (iLitLen >= 16) {
-                        LONG_LE.set(dst, op,              (long) LONG_LE.get(src, ip));
-                        LONG_LE.set(dst, op + 8,          (long) LONG_LE.get(src, ip + 8));
-                        LONG_LE.set(dst, op + iLitLen - 16, (long) LONG_LE.get(src, ip + iLitLen - 16));
-                        LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
-                    } else if (iLitLen >= 8) {
-                        LONG_LE.set(dst, op,                (long) LONG_LE.get(src, ip));
-                        LONG_LE.set(dst, op + iLitLen - 8,  (long) LONG_LE.get(src, ip + iLitLen - 8));
-                    } else if (iLitLen >= 4) {
-                        INT_LE.set(dst, op,                (int) INT_LE.get(src, ip));
-                        INT_LE.set(dst, op + iLitLen - 4,  (int) INT_LE.get(src, ip + iLitLen - 4));
-                    }
-                } else {
-                    System.arraycopy(src, ip, dst, op, iLitLen);
-                }
+                System.arraycopy(src, ip, dst, op, iLitLen);
                 ip += iLitLen;
                 op += iLitLen;
             }
@@ -812,6 +798,14 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     }
 
     static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
+        if (litLen <= 16 && srcPos + 16 <= src.length && dstPos + 16 <= dst.length) {
+            /* Wild copy: two fixed 8-byte moves cover any 0-16 byte literal run
+               without per-length branching; overshoot bytes are rewritten by the
+               following token/match output (guards keep overshoot in bounds). */
+            LONG_LE.set(dst, dstPos,     (long) LONG_LE.get(src, srcPos));
+            LONG_LE.set(dst, dstPos + 8, (long) LONG_LE.get(src, srcPos + 8));
+            return dstPos + litLen;
+        }
         if (litLen >= 16) {
             if (litLen <= 32) {
                 LONG_LE.set(dst, dstPos,      (long) LONG_LE.get(src, srcPos));
