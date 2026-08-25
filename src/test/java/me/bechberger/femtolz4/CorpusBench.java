@@ -15,6 +15,8 @@ public final class CorpusBench {
     private static final int MEASURE_MS = Integer.getInteger("bench.measureMs", 400);
     private static final int TRIALS = Integer.getInteger("bench.trials", 5);
     private static final String IMPL = System.getProperty("bench.impl", "dispatch");
+    /** Emit extra rows (java-bypass + yawkat comparisons). Default true. */
+    private static final boolean EXTRAS = !"false".equals(System.getProperty("bench.extras"));
     // Values are maxChain depths: 0=2-way-fast, 1=fast, 2+=chain
     private static final int[] LEVELS = Arrays.stream(System.getProperty("bench.levels", "0,1,2,4,8").split(","))
             .map(String::trim).mapToInt(Integer::parseInt).toArray();
@@ -42,7 +44,7 @@ public final class CorpusBench {
     @FunctionalInterface
     private interface Op { int run(); }
 
-    private record Timing(double mbps, double ns) {}
+    private record Timing(double mbps, double ns, double mbpsMax, double nsMin) {}
 
     public static void main(String[] args) throws Exception {
         Locale.setDefault(Locale.ROOT);
@@ -84,13 +86,13 @@ public final class CorpusBench {
             }
 
             // ── femto-java bypass rows (always, independent of IMPL/LEVELS) ──
-            if (!IMPL.equals("java")) {
+            if (EXTRAS && !IMPL.equals("java")) {
                 emitFemtoJava(src, name, 1,   "femto-java-fast");
                 emitFemtoJava(src, name, 256, "femto-java");
             }
 
             // ── yawkat comparison rows ────────────────────────────────────────
-            if (YAWKAT != null) {
+            if (EXTRAS && YAWKAT != null) {
                 emitYawkat(src, name, YAWKAT_FAST, YAWKAT_DEC, "yawkat-fast", 1);
                 emitYawkat(src, name, YAWKAT_HC,   YAWKAT_DEC, "yawkat-hc",   YAWKAT_HC_MAXCHAIN);
             }
@@ -199,7 +201,7 @@ public final class CorpusBench {
 
         Arrays.sort(mbps);
         Arrays.sort(ns);
-        return new Timing(mbps[TRIALS / 2], ns[TRIALS / 2]);
+        return new Timing(mbps[TRIALS / 2], ns[TRIALS / 2], mbps[TRIALS - 1], ns[0]);
     }
 
     private static void runFor(Op op, int bytes, long durationNanos) {
@@ -212,9 +214,10 @@ public final class CorpusBench {
 
     private static void emit(String operation, String corpus, int size, int maxChain,
                              String implName, Timing timing, double ratio, int compressed) {
-        System.out.printf("CSV,%s,%s,%d,%d,%s,%.3f,%.3f,%.8f,%d%n",
+        System.out.printf("CSV,%s,%s,%d,%d,%s,%.3f,%.3f,%.8f,%d,%.3f,%.3f%n",
                 operation, corpus, size, maxChain, implName,
-                timing.mbps(), timing.ns(), ratio, compressed);
+                timing.mbps(), timing.ns(), ratio, compressed,
+                timing.mbpsMax(), timing.nsMin());
     }
 
     private CorpusBench() {}
