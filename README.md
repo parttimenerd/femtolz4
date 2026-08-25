@@ -18,7 +18,7 @@ _This is a prototype of the SapMachine team._
 <dependency>
   <groupId>me.bechberger</groupId>
   <artifactId>femtolz4</artifactId>
-  <version>0.2.0</version>
+  <version>0.2.1</version>
 </dependency>
 ```
 
@@ -61,7 +61,17 @@ new LZ4FrameOutputStream(out, level)               // level 1–9, default block
 new LZ4FrameOutputStream(out, blockSize, level)    // explicit block size and level
 new LZ4FrameOutputStream(out, LZ4.compress())      // pass a Compressor directly
 new LZ4FrameOutputStream(out, LZ4.compressHigh())
+
+new LZ4FrameInputStream(in)                        // default: reads concatenated frames
+new LZ4FrameInputStream(in, true)                  // readSingleFrame: stop after first frame,
+                                                   // leave remaining bytes on the stream
 ```
+
+`readSingleFrame=true` is useful when an LZ4 frame is embedded inside a larger file format
+with a non-LZ4 footer (e.g. CJFR). After `read()` returns -1, the underlying `InputStream`
+is positioned immediately after the LZ4 end mark, leaving any trailing bytes untouched.
+Any skippable frames before the LZ4 frame are still consumed. Mirrors lz4-java's
+`readSingleFrame` parameter.
 
 **Compression levels** (1–9):
 
@@ -206,7 +216,7 @@ Requirements: JDK 17+, Maven 3.6+.
 mvn package
 ```
 
-The JAR lands at `target/femtolz4-0.2.0.jar`.
+The JAR lands at `target/femtolz4-0.2.1.jar`.
 
 
 ### Native libraries

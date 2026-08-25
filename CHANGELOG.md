@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-25
+
+### Added
+- `LZ4FrameInputStream(InputStream, boolean readSingleFrame)` — when `true`, stops after the first non-skippable frame end mark without reading further bytes from the underlying stream; mirrors lz4-java's `readSingleFrame` parameter
+
 ## [0.2.0] - 2026-08-25
 
 ### Added

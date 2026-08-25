@@ -392,6 +392,60 @@ class IssueRegressionTest {
         assertTrue(ex.getMessage().contains("content checksum"));
     }
 
+    // ── readSingleFrame: trailing bytes left on stream ────────────────────────
+    // CJFR appends an uncompressed footer immediately after the LZ4 end mark.
+    // With readSingleFrame=true the LZ4FrameInputStream must stop at the end
+    // mark and leave those bytes readable from the underlying stream.
+
+    @Test void readSingleFrame_trailingBytesLeftOnStream() throws Exception {
+        byte[] src    = "body".getBytes(StandardCharsets.UTF_8);
+        byte[] footer = "FOOTER".getBytes(StandardCharsets.UTF_8);
+        byte[] frame  = frameCompress(src);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        baos.write(frame);
+        baos.write(footer);
+        ByteArrayInputStream underlying = new ByteArrayInputStream(baos.toByteArray());
+
+        try (LZ4FrameInputStream lz4 = new LZ4FrameInputStream(underlying, true)) {
+            assertArrayEquals(src, lz4.readAllBytes());
+        }
+        // Footer must still be readable from the underlying stream
+        byte[] remaining = underlying.readAllBytes();
+        assertArrayEquals(footer, remaining, "trailing bytes must remain on the underlying stream");
+    }
+
+    @Test void readSingleFrame_defaultConstructorStillReadsConcatenatedFrames() throws Exception {
+        byte[] a = "first".getBytes(StandardCharsets.UTF_8);
+        byte[] b = "second".getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream o = new LZ4FrameOutputStream(baos)) { o.write(a); }
+        try (LZ4FrameOutputStream o = new LZ4FrameOutputStream(baos)) { o.write(b); }
+        byte[] expected = new byte[a.length + b.length];
+        System.arraycopy(a, 0, expected, 0, a.length);
+        System.arraycopy(b, 0, expected, a.length, b.length);
+        // default constructor: readSingleFrame=false → concatenated frames decoded
+        assertArrayEquals(expected,
+            new LZ4FrameInputStream(new ByteArrayInputStream(baos.toByteArray())).readAllBytes());
+    }
+
+    @Test void readSingleFrame_trueStopsAtFirstFrameEvenIfMoreFollow() throws Exception {
+        byte[] a = "first".getBytes(StandardCharsets.UTF_8);
+        byte[] b = "second".getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (LZ4FrameOutputStream o = new LZ4FrameOutputStream(baos)) { o.write(a); }
+        byte[] frameB = frameCompress(b);
+        baos.write(frameB);
+        ByteArrayInputStream underlying = new ByteArrayInputStream(baos.toByteArray());
+
+        try (LZ4FrameInputStream lz4 = new LZ4FrameInputStream(underlying, true)) {
+            assertArrayEquals(a, lz4.readAllBytes());
+        }
+        // second frame must still be readable
+        byte[] remaining = underlying.readAllBytes();
+        assertArrayEquals(frameB, remaining, "second frame must remain on underlying stream");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static byte[] frameCompress(byte[] src) {

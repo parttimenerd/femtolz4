@@ -28,6 +28,7 @@ public final class LZ4FrameInputStream extends InputStream {
     private static final int DEP_HISTORY = 64 * 1024;
 
     private final InputStream in;
+    private final boolean readSingleFrame;
     private final XXHash32.Streaming contentHasher = new XXHash32.Streaming();
     private int  blockMaxSize;
     private boolean blockIndependent;
@@ -44,13 +45,29 @@ public final class LZ4FrameInputStream extends InputStream {
 
     /**
      * Creates a decompressing stream that reads from {@code in}.
-     * The LZ4 frame header is validated immediately.
+     * Concatenated frames are decoded transparently (mirrors lz4-java's default).
      *
      * @throws LZ4Exception if the stream does not start with a valid LZ4 frame header
      * @throws IOException  on I/O error
      */
     public LZ4FrameInputStream(InputStream in) throws IOException {
+        this(in, false);
+    }
+
+    /**
+     * Creates a decompressing stream that reads from {@code in}.
+     *
+     * @param readSingleFrame when {@code true}, stop after the first non-skippable frame
+     *                        end mark without reading further bytes from the underlying
+     *                        stream (mirrors lz4-java's {@code readSingleFrame} parameter);
+     *                        when {@code false} (the default), concatenated frames are
+     *                        decoded transparently
+     * @throws LZ4Exception if the stream does not start with a valid LZ4 frame header
+     * @throws IOException  on I/O error
+     */
+    public LZ4FrameInputStream(InputStream in, boolean readSingleFrame) throws IOException {
         this.in = in;
+        this.readSingleFrame = readSingleFrame;
         readFrameHeader();
     }
 
@@ -101,6 +118,7 @@ public final class LZ4FrameInputStream extends InputStream {
         if (sizeField == 0) {
             // end mark
             if (hasContentChecksum) verifyContentChecksum();
+            if (readSingleFrame) { eof = true; return false; }
             return tryNextFrame();
         }
 
@@ -110,6 +128,7 @@ public final class LZ4FrameInputStream extends InputStream {
     /**
      * After an end-mark (and its optional content checksum), look for a
      * concatenated LZ4 frame or a skippable frame. Returns false on true EOF.
+     * Never called when readSingleFrame=true.
      */
     private boolean tryNextFrame() throws IOException {
         while (true) {
