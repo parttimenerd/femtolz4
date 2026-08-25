@@ -282,6 +282,14 @@ def main() -> None:
                 if notes_file.exists():
                     notes_file.unlink()
 
+            # Notify parttimenerd.github.io to update releases.json
+            run([
+                "gh", "api",
+                "repos/parttimenerd/parttimenerd.github.io/dispatches",
+                "--method", "POST",
+                "-f", "event_type=femto-release",
+            ], "Notifying parttimenerd.github.io")
+
     except SystemExit:
         print("\nRolling back version changes …")
         (ROOT / "pom.xml").write_text(pom_snap)
