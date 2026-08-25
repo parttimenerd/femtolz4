@@ -126,20 +126,29 @@ int n = c.compress(src, srcOff, srcLen, dst, dstOff, dst.length - dstOff);
 |----------|-------|-------------|
 | `LEVEL_FAST` | 1 | Fastest compression (chain=1) |
 | `LEVEL_DEFAULT` | 9 | Default / best ratio (chain=256) |
-| `LEVEL_MAX` | 9 | Same as `LEVEL_DEFAULT`; maximum accepted level |
+| `LEVEL_MAX` | 9 | Same as `LEVEL_DEFAULT` |
+| `LZ4_BEST` | 13 | Whole-block optimal parser |
+| `LZ4_ULTRA` | 14 | Optimal parser with exhaustive search |
 
-**Level → chain depth mapping** (matches the reference `lz4` CLI):
+**Level → algorithm:**
 
-| Level | Chain depth |
-|-------|-------------|
-| 1–2 | 1 (fast) |
-| 3 | 4 |
-| 4 | 8 |
-| 5 | 16 |
-| 6 | 32 |
-| 7 | 64 |
-| 8 | 128 |
-| 9 | 256 |
+| Level | Algorithm |
+|-------|-----------|
+| 1–2 | Hash chain, depth 1 (fast) |
+| 3 | Hash chain, depth 4 |
+| 4 | Hash chain, depth 8 |
+| 5 | Hash chain, depth 16 |
+| 6 | Hash chain, depth 32 |
+| 7 | Hash chain, depth 64 |
+| 8 | Hash chain, depth 128 |
+| 9 | Hash chain, depth 256 |
+| 10–12 | Bounded-DP optimal parser (`lz4opt`) |
+| 13 (`LZ4_BEST`) | Whole-block optimal parser |
+| 14 (`LZ4_ULTRA`) | Whole-block optimal parser, exhaustive search |
+
+Levels 10–12 use the same bounded-DP optimal parser as the reference `lz4` CLI.
+Levels 13–14 run a whole-block DP that considers every position — better ratio,
+higher memory usage (~24 × srcLen bytes), slower compression.
 
 Similarly, `LZ4.decompress()` / `LZ4.decompressor()` return a `LZ4.Decompressor`:
 
@@ -180,12 +189,10 @@ Frame feature support:
 
 ## Limitations
 
-- **lz4opt (levels 10–12) is not implemented.** The reference `lz4` CLI offers a
-  bounded-DP optimal parser at levels 10–12. Benchmarking on real JFR and corpus
-  data showed only 1–2% ratio improvement over level 9 at 3–80× slower compression
-  speed — not a worthwhile tradeoff for an LZ4 implementation where the format itself
-  limits the compression ratio ceiling. Level 9 (chain=256) is the practical maximum
-  for this library.
+- **`LZ4FrameOutputStream` writes block-independent frames only.** Block-dependent
+  mode (better ratio on small blocks) is not implemented.
+- **Native acceleration is `linux/amd64` only.** All other platforms fall back to
+  pure Java automatically — no configuration needed.
 
 ## Relationship to lz4-java
 
