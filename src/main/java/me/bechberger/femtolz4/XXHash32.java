@@ -68,10 +68,7 @@ public final class XXHash32 {
 
     /** Reads 4 bytes at {@code p} as a little-endian int. */
     private static int readInt(byte[] data, int p) {
-        return (data[p] & 0xFF)
-             | ((data[p+1] & 0xFF) <<  8)
-             | ((data[p+2] & 0xFF) << 16)
-             | ((data[p+3] & 0xFF) << 24);
+        return (int) LZ4Java.INT_LE.get(data, p);
     }
 
     /** One round of the 16-byte-block accumulator update. */
