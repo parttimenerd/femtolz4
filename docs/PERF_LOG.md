@@ -273,3 +273,16 @@ The generic op+matchLen>dstEnd guard ran for every sequence; the wild-copy arm
 (offset>=8 && len<=16 && op+16<=dstEnd) already implies it. Guard moved into
 the arraycopy/copyMatch arms only. DualBench decode: serial-gc@8 +6.3%
 (on top of E37's +9.8%), serial-160m@1 +11% — windows consistent.
+
+## FINAL confirmed improvements (HEAD vs orig 51f3a6d, DualBench medians)
+| cell | B/A |
+|---|---|
+| decode serial-gc @8 | +54.3% |
+| decode gc_G1 @1 | +54.2% |
+| decode serial-160m @1 | +24.4% |
+| decode movie-lens @1 | +30.2% |
+| decode onnx-t5 @1 | +38.8% |
+| decode gitpack @1 | +8.0% |
+| compress zgc-160m @1 | +2.6% (ratio identical) |
+| compress wat-160m @1 | +19.3% (ratio identical) |
+| compress mixed/random @1 (earlier E33) | +27% / +61% |
