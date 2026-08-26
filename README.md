@@ -73,13 +73,14 @@ is positioned immediately after the LZ4 end mark, leaving any trailing bytes unt
 Any skippable frames before the LZ4 frame are still consumed. Mirrors lz4-java's
 `readSingleFrame` parameter.
 
-**Compression levels** (1–9):
+**Compression levels** (1–10):
 
 | Level | Speed | Ratio |
 |-------|-------|-------|
 | 1 (default) | fastest | good |
 | 5 | balanced | better |
 | 9 (`LEVEL_MAX`) | slower | best |
+| 10 (`LEVEL_OPTIMAL`) | much slower (~5–10x) | maximum (backward-DP optimal parser; +1.5–2.6% ratio over level 9 on real data) |
 
 **Block sizes:** 64 KiB, 256 KiB, 1 MiB (default), 4 MiB.
 Smaller blocks reduce peak memory use; larger blocks improve ratio on

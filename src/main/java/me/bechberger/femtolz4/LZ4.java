@@ -96,14 +96,16 @@ public final class LZ4 {
      *   <li>Level 6: chain=32</li>
      *   <li>Level 7: chain=64</li>
      *   <li>Level 8: chain=128</li>
-     *   <li>Level 9: chain=256 (maximum; {@link #LEVEL_MAX})</li>
+     *   <li>Level 9: chain=256 ({@link #LEVEL_MAX})</li>
+     *   <li>Level 10: backward-DP optimal parser ({@link #LEVEL_OPTIMAL}) — maximum ratio
+     *       at roughly 5-10x the level-9 cost</li>
      * </ul>
      *
      * <p>The returned instance is an {@link LZ4Java} (or a native wrapper when
      * native is available). Reusing the same instance across calls avoids
      * re-allocating hash tables.
      *
-     * @param level compression level from {@value #LEVEL_FAST} to {@value #LEVEL_MAX};
+     * @param level compression level from {@value #LEVEL_FAST} to {@value #LEVEL_OPTIMAL};
      *              values outside this range are clamped
      */
     public static Compressor compressor(int level) {
@@ -128,7 +130,7 @@ public final class LZ4 {
     /**
      * Like {@link #compressor(int)} but always uses the pure-Java path.
      *
-     * @param level compression level from {@value #LEVEL_FAST} to {@value #LEVEL_MAX};
+     * @param level compression level from {@value #LEVEL_FAST} to {@value #LEVEL_OPTIMAL};
      *              values outside this range are clamped
      */
     public static Compressor compressorJava(int level) {

@@ -233,3 +233,21 @@ Day-3 lesson: full-pair A/B on this box is unusable (Defender on-access scans,
 coline noise +-40% per pass). DualBench (same JVM, URLClassLoader-separated
 jars, alternating 1.2-2s windows, median ratio) has a +-2% same-jar floor and
 resolved multiple long-standing misattributions overnight.
+
+## E33 (KEPT): skip controller end-step 17 -> 33
+DualBench: random-20m@1 +27..+61% (ratio identical), mixed-20m@1 +27%
+(ratio marginally better), serial-gc@1 neutral byte-identical. Commit b65440f.
+
+## Native reference points (lz4_src.c, -O3, this host)
+compress: native serial@1 1015 MB/s (java ~700), serial@8 204 (java ~60),
+gc_G1@1 761 (java ~360), gc_G1@8 161, profile@8 261 (java ~120).
+DECODE: native 958-1488 MB/s vs java 2100-3300 — java decode is 1.5-2.5x
+FASTER than the bundled native build everywhere measured.
+compress headroom remains (up to ~3x at chain 8); gap is per-candidate
+VarHandle/index overhead in extendMatch, not structure.
+
+## Level 10 (optimal parser) on real data — verified + documented
+serial-gc: 2.192 -> 2.226 (+1.5%), 45 -> 13 MB/s
+profile:   3.113 -> 3.194 (+2.6%), 104 -> 16 MB/s
+movie-lens:2.731 -> 2.790 (+2.1%), 110 -> 12 MB/s
+Round-trip verified (RT OK). README documents level 10.
