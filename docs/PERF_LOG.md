@@ -168,3 +168,29 @@ and safe, helps long-match cases.
 None of E12-E14 touch decode; candidate causes: sequence-structure change from
 E13 (more/shorter matches), or JIT layout drift across jar rebuilds. jfr2 pair
 (E13+E14 only, vs 37ea025) re-measures to attribute.
+
+### E15 (REJECTED): replace wild-copy arms with arraycopy in decode
+-35% decode on real data — arraycopy dispatch cost for 4-16B copies >> VarHandle
+pair. The VarHandles really are the fast path; the 46-79% ArrayHandle.index
+samples are their (irreducible-without-Unsafe) bounds plumbing, not a bug.
+
+### E17 (REJECTED): single 8B move arms for len<=8 literals/matches
+-5.2% decode on full jfr4 pair. Halving accesses didn't pay: probably branch
+shape/inlining of the added tier hurt more than the saved move.
+
+### E18 (KEPT f5e3eed): decompressJava wrapper skips Arrays.copyOf tail
+n==decompressedSize is the norm -> return dst directly. +3.2-4.2% on the
+array-returning decode API (ProfileDriver on all_gc_SerialGC). CorpusBench
+bypasses the wrapper so the change is invisible there.
+
+### E19 (REJECTED): chain-walk early exit when len>=48
+Slower AND worse ratio on real JFR data: -6.1% compress mean, ratio
+-0.36..-0.48% on two files. Deep search pays off on real repetitive streams.
+
+### E20 (measuring): copyMatch pattern arms for offset==8 and offset==16
+Real binary payloads (fj-kmeans: double lattices; JFR: pointer/event-size
+lattices) have exact-8/16 periodic overlap matches; pure-store loops avoid the
+geometric arraycopy's log(len/offset) intrinsic dispatches.
+prof6: fj-kmeans decode@8 had 87.7% of samples inside copyMatch:928 (the
+geometric loop end), so the whole decode spends its time materializing overlap
+matches.

@@ -911,6 +911,23 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             int d = dst, end = dst + len;
             while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
+        } else if (offset == 8) {
+            /* 8-byte lattice (timestamps, pointers, doubles in real binary
+               payloads): pure-store loop — no store->load forwarding chain. */
+            long pattern = (long) LONG_LE.get(buf, src);
+            int d = dst, end = dst + len;
+            while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
+            while (d < end) { buf[d] = buf[d - offset]; d++; }
+        } else if (offset == 16) {
+            long p0 = (long) LONG_LE.get(buf, src);
+            long p1 = (long) LONG_LE.get(buf, src + 8);
+            int d = dst, end = dst + len;
+            while (d + 16 <= end) {
+                LONG_LE.set(buf, d,     p0);
+                LONG_LE.set(buf, d + 8, p1);
+                d += 16;
+            }
+            while (d < end) { buf[d] = buf[d - offset]; d++; }
         } else {
             /* Any offset >= 3 with offset < len: prime the first `offset` bytes
                (phase-aligned tile), then grow geometrically via arraycopy. Every
