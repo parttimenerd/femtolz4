@@ -34,7 +34,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     /* 12-bit fast tables: long[4096] storing (v4<<32|pos) (32 KB).
        Sentinel = srcOff-WINDOW_SIZE-1 in low 32 bits, guarantees (pos-sentinel)>WINDOW_SIZE.
        v4 fingerprint avoids src[] read on most hash-collision misses. */
-    private static final int HASH_BITS_FAST  = 12;
+    private static final int HASH_BITS_FAST  = 13;
     /* Fast-table empty sentinel: position part -WINDOW_SIZE (fills below), so
        `pos - sv` is always >= WINDOW_SIZE and any v4 tag still just fails the
        distance test. */

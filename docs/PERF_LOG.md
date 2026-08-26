@@ -333,3 +333,7 @@ d@1: jfr-serial +48.3%, json +47.4%, mixed +41.0%, rle +1.2%
 d@8: jfr-serial +51.1%, json +11.8%, mixed +46.9%, rle +1.5%
 (all DualBench medians, byte-identical output; c@8 residual = layout drift,
  every algorithmic revert measured worse)
+
+## E50 (KEPT): HASH_BITS_FAST 12 -> 13
+DualBench c@1 vs e87375f: serial-gc +4.9% (ratio 1.9825->2.0066), json +0.4%,
+mixed +1.2%, rle +0.3%. Fewer collisions, fill cost still trivial.
