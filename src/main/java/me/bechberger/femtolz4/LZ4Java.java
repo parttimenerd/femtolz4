@@ -35,6 +35,10 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
        Sentinel = srcOff-WINDOW_SIZE-1 in low 32 bits, guarantees (pos-sentinel)>WINDOW_SIZE.
        v4 fingerprint avoids src[] read on most hash-collision misses. */
     private static final int HASH_BITS_FAST  = 12;
+    /* Fast-table empty sentinel: position part -WINDOW_SIZE (fills below), so
+       `pos - sv` is always >= WINDOW_SIZE and any v4 tag still just fails the
+       distance test. */
+    private static final long EMPTY_SLOT = 0x00000000FFFF0000L;
     private static final int HASH_SIZE_FAST  = 1 << HASH_BITS_FAST;
 
     /** Chain marker for the optimal-parse mode (see {@link LZ4Optimal}). */
@@ -627,6 +631,11 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                              byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
         long[] head = fastHead;
+        /* Pre-clear with sentinel (sv = -WINDOW_SIZE => every distance check
+           fails): 32 KiB fill amortizes to ≈ nothing on any realistic block,
+           and drops the stale-slot verify (a VarHandle re-read of src[sv])
+           plus sv>=srcOff / pos-sv>=1 compares from every probe. */
+        Arrays.fill(head, EMPTY_SLOT);
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -650,9 +659,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             long slot1 = head[h1];
 
             int sv = (int) slot;
-            if ((int)(slot >>> 32) == v4 && sv >= srcOff
-                    && pos - sv >= 1 && pos - sv < WINDOW_SIZE
-                    && (int) INT_LE.get(src, sv) == v4) {
+            if ((int)(slot >>> 32) == v4 && pos - sv < WINDOW_SIZE) {
                 int maxMatch = safeEnd - pos;
                 int len = extendMatch(src, sv, pos, maxMatch);
 
@@ -682,9 +689,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
 
             int sv1 = (int) slot1;
-            if ((int)(slot1 >>> 32) == v4_1 && sv1 >= srcOff
-                    && pos - sv1 >= 1 && pos - sv1 < WINDOW_SIZE
-                    && (int) INT_LE.get(src, sv1) == v4_1) {
+            if ((int)(slot1 >>> 32) == v4_1 && pos - sv1 < WINDOW_SIZE) {
                 int maxMatch1 = safeEnd - pos;
                 int len1 = extendMatch(src, sv1, pos, maxMatch1);
 

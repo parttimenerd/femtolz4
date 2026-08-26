@@ -286,3 +286,9 @@ the arraycopy/copyMatch arms only. DualBench decode: serial-gc@8 +6.3%
 | compress zgc-160m @1 | +2.6% (ratio identical) |
 | compress wat-160m @1 | +19.3% (ratio identical) |
 | compress mixed/random @1 (earlier E33) | +27% / +61% |
+
+## E42 (KEPT): memset table + sentinel instead of fill-free stale checks
+Pre-clear fastHead with EMPTY_SLOT per call; probe guard collapses from
+(v4-match && sv>=srcOff && delta>=1 && delta<WINDOW && src re-read) to
+(v4-match && delta<WINDOW). Ratios identical everywhere; json-10m@1 +10.8%,
+wat-160m@1 +3.8%, serial-gc@1 neutral. Tests+RT green.
