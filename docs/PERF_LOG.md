@@ -194,3 +194,22 @@ geometric arraycopy's log(len/offset) intrinsic dispatches.
 prof6: fj-kmeans decode@8 had 87.7% of samples inside copyMatch:928 (the
 geometric loop end), so the whole decode spends its time materializing overlap
 matches.
+
+## Big-file benchmark corpora + noise protocol
+
+corpora-big/: 3 x 160MB slices of renaissance-all_gc_details_{ZGC,G1,SerialGC}.jfr
+(real JFR data, ratio ~2.7-3.6 at chain 1/8). ab_bench.sh now adds -Xmx4g,
+trials=13. ~6 min per pass; ab pair = burnin+A1,B1,B2,A2 ~= 30 min.
+
+Noise calibration: decompress columns serve as null-control when a change only
+touches compress. Thermal drift measured up to +-12% within a single pair run
+(big1: identical decode code showed +5.2% mean, +12.6% max delta).
+Conclusions drawn only when |compress delta| > |same-cell decode delta| by a
+clear margin, or when direction is consistent across >= 2 independent pairs.
+
+### Findings
+- E12-style tiered extendMatch: regressed on 10MB JFR files (jfr2/large
+  mismatch-count distribution); needs big-file re-eval (E21, big2 pair).
+- Commit 293accf stride-scaled insertion changes chain>=2 output slightly
+  (-0.1%% ratio) by design; chain-1 output unchanged. Verified deterministically
+  by byte-diffing compressed streams of both jars (jfr2/big1).

@@ -26,8 +26,8 @@ CP="build/test-classes:$MAIN"
 
 mkdir -p results
 OUT="results/corpus-${LABEL}.csv"
-java --enable-native-access=ALL-UNNAMED \
-     -Dbench.warmMs=600 -Dbench.measureMs=800 -Dbench.trials=9 \
+java --enable-native-access=ALL-UNNAMED -Xmx4g \
+     -Dbench.warmMs=1200 -Dbench.measureMs=1200 -Dbench.trials=9 \
      -Dbench.impl="$IMPL" -Dbench.levels="$LEVELS" -Dbench.extras="${EXTRAS:-true}" \
      -cp "$CP" me.bechberger.femtolz4.CorpusBench "${CORPORA[@]}" 2>/dev/null > "$OUT"
 echo "wrote $OUT  ($(grep -c '^CSV' "$OUT") rows)"

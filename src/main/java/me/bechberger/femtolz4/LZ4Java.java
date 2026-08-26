@@ -860,6 +860,19 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
      */
     static int extendMatch(byte[] src, int sv, int pos, int maxMatch) {
         int len = MIN_MATCH;
+        /* Short-first tier: real-world (JFR) match probes resolve in <= 16B far
+           more often than not - exit via a 16-byte block before committing to
+           32-byte strides (which waste 4 loads per rejected fast-path probe). */
+        if (len + 16 <= maxMatch) {
+            long d1 = (long) LONG_LE.get(src, sv + len)     ^ (long) LONG_LE.get(src, pos + len);
+            long d2 = (long) LONG_LE.get(src, sv + len + 8) ^ (long) LONG_LE.get(src, pos + len + 8);
+            if ((d1 | d2) != 0L) {
+                if (d1 != 0L) { len += Long.numberOfTrailingZeros(d1)  >>> 3; return len; }
+                len += 8 + (Long.numberOfTrailingZeros(d2) >>> 3);
+                return len;
+            }
+            len += 16;
+        }
         while (len + 32 <= maxMatch) {
             long d1 = (long) LONG_LE.get(src, sv + len)      ^ (long) LONG_LE.get(src, pos + len);
             long d2 = (long) LONG_LE.get(src, sv + len + 8)  ^ (long) LONG_LE.get(src, pos + len + 8);
