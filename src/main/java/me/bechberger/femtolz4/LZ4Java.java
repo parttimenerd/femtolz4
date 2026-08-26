@@ -756,22 +756,21 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                     litLen += b;
                 } while (b == 255);
             }
-            if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
-            if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
             int iLitLen = (int) litLen;
             if (iLitLen == 0) {
-                // Dense match chains (e.g. JSON) have mostly empty literal runs;
-                // don't pay the wild copy's 32 bytes of memory traffic for nothing.
+                /* Dense match chains (JFR/JSON) have mostly empty literal runs:
+                   skip both the guards and the wild copy entirely. */
             } else if (litLen <= 16 && op + 16 <= dstEnd && ip + 16 <= srcEnd) {
                 /* Wild copy: two fixed 8-byte moves cover any 0-16 byte literal run
-                   without per-length branching (JFR data: 95%+ of runs are <= 16 bytes).
-                   Overshoot bytes stay within dstEnd and are overwritten by the
-                   following sequence; the tail margin keeps reads within srcEnd. */
+                   without per-length branching; overshoot is rewritten by the
+                   following sequence (both ends stay in bounds by the checks above). */
                 LONG_LE.set(dst, op,     (long) LONG_LE.get(src, ip));
                 LONG_LE.set(dst, op + 8, (long) LONG_LE.get(src, ip + 8));
                 ip += iLitLen;
                 op += iLitLen;
-            } else if (iLitLen != 0) {
+            } else {
+                if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
+                if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
                 System.arraycopy(src, ip, dst, op, iLitLen);
                 ip += iLitLen;
                 op += iLitLen;

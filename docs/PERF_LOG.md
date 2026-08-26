@@ -251,3 +251,19 @@ serial-gc: 2.192 -> 2.226 (+1.5%), 45 -> 13 MB/s
 profile:   3.113 -> 3.194 (+2.6%), 104 -> 16 MB/s
 movie-lens:2.731 -> 2.790 (+2.1%), 110 -> 12 MB/s
 Round-trip verified (RT OK). README documents level 10.
+
+## E37 (KEPT): literal-guard skip when litLen == 0 in decode
+Match-dense data (JFR, JSON) has mostly empty literal runs; the long-form
+output/input guards cost 2 speculated branches per sequence. Moved guards into
+the non-zero branches only. DualBench decode: serial-gc@8 +9.8%, gc_G1@1
++8.6%, serial-160m@1 +6.2% (all windows consistent). Both tests+RT green.
+
+## E36 (REJECTED): adaptive fast hash table for big inputs
+2^14 slots: ratio +1.2% but speed -6%; 2^17: ratio +1.7%, speed -19% on
+jfr-gcdet-zgc-160m — probe cache misses outweigh fewer collisions. Fixed 2^12
+fill-free table stands for all sizes.
+
+## New big corpora staged (bench-data/corpora-big)
+160MB slices x3 JFR gc_details; wat-jfrtofp-160m (structured text,
+ratio 6.5/9.8); gitpack-79m (zlib blobs, ratio ~1.0); cjfr-gcdet-g1-41m
+(pre-compressed JFR, ratio 1.04); onnx-t5-40m (binary floats, ratio 1.04/1.17).
