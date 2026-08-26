@@ -368,3 +368,8 @@ Public levels: 1,2 -> fast(1); 3->4; 4->8; 5->16; 6->32; 7->64; 8->128;
 9->256; 10->OPTIMAL. compressChain2 (chain==2) currently unreachable from
 public levels. Frame write() already compresses directly from caller buffer
 for full blocks (no double-copy); XXHash32 only fires with checksums enabled.
+
+## E60 (REJECTED): arraycopy(16) instead of 2x LONG_LE wild copies
+JFR showed 42% of decode@1 in VarHandleByteArrayAsLongs.index; swapping the
+four VarHandle ops for one System.arraycopy intrinsic was -44% on serial-gc
+decode (arraycopy fixed setup >> 2 vector pairs for 16B). Reverted.
