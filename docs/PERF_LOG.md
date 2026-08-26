@@ -213,3 +213,23 @@ clear margin, or when direction is consistent across >= 2 independent pairs.
 - Commit 293accf stride-scaled insertion changes chain>=2 output slightly
   (-0.1%% ratio) by design; chain-1 output unchanged. Verified deterministically
   by byte-diffing compressed streams of both jars (jfr2/big1).
+
+## Cumulative: orig(51f3a6d) -> HEAD(49941d3) on real JFR corpora (DualBench median)
+
+| corpus | c@1 | c@8 | d@1 | d@8 |
+|---|---|---|---|---|
+| all_gc_SerialGC | 0.991 | 0.934 | 1.331 | 1.378 |
+| all_gc_G1 | 1.035 | 0.866 | 1.474 | 1.430 |
+| fj-kmeans | 1.295 | 0.876 | 1.175 | 1.256 |
+| movie-lens | 1.041 | 0.854 | 1.241 | 1.325 |
+| all_profile_G1 | 0.981 | 0.917 | 1.299 | 1.337 |
+
+Decode: +18..+47% across the board (mean ~+33%). Compress@1: up to +30%
+(kmeans), neutral elsewhere. Compress@8: -7..-15% with byte-identical output —
+tracked to execution-shape drift (inlining/layout) on this host; E31
+(byte-store offsets) and stride/fill variants all measured WORSE, so kept.
+
+Day-3 lesson: full-pair A/B on this box is unusable (Defender on-access scans,
+coline noise +-40% per pass). DualBench (same JVM, URLClassLoader-separated
+jars, alternating 1.2-2s windows, median ratio) has a +-2% same-jar floor and
+resolved multiple long-standing misattributions overnight.
