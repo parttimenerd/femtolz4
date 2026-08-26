@@ -244,6 +244,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 if (len > bestLen) {
                     bestLen = len; bestDist = pos - sv;
                     if (len == maxMatch) break;
+                    /* E55: a match this long is almost always good enough —
+                       spend only one more candidate trying to beat it. */
+                    if (len >= 64 && chainLeft > 2) chainLeft = 2;
                 }
                 if (--chainLeft == 0) break;
                 sv = next;

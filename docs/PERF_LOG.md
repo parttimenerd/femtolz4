@@ -337,3 +337,13 @@ d@8: jfr-serial +51.1%, json +11.8%, mixed +46.9%, rle +1.5%
 ## E50 (KEPT): HASH_BITS_FAST 12 -> 13
 DualBench c@1 vs e87375f: serial-gc +4.9% (ratio 1.9825->2.0066), json +0.4%,
 mixed +1.2%, rle +0.3%. Fewer collisions, fill cost still trivial.
+
+## E52 (REJECTED): insert-loop 8-byte dual-hash unroll
+Byte-identical, neutral on wat@8 (0.993) and serial-gc@8 (0.998): C2 already
+schedules the scalar loop optimally. Reverted for simplicity.
+
+## E55 (KEPT, T=64): chain-walk early exit after len>=64 (one more candidate)
+JFR on c@8 wat: chain walk + extendMatch ~45% of samples; most extra candidates
+never beat a >=64B match. c@8: wat +12.9% (ratio -0.86%), serial-gc +5.9%
+(ratio -0.007%), json -0.4% (identical), mixed -4.2% (identical).
+T=24 measured +44%/-4.8% on wat: too much ratio loss -> 64.
