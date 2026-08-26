@@ -207,7 +207,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                matching once a block accumulated 128 misses. */
             if (missBytes >= 128) {
                 int step = (skipCtr >> 6) + 1;
-                if (skipCtr < (17 << 6)) skipCtr++;
+                if (skipCtr < (33 << 6)) skipCtr++;
                 pos += step;
                 if (pos > safeMain) break;
                 missBytes = recoverMixedBoundary ? 125 : missBytes + step;
@@ -363,7 +363,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                position so a later compressible region can recover. */
             if (missBytes >= 128) {
                 int step = (skipCtr >> 6) + 1;
-                if (skipCtr < (17 << 6)) skipCtr++;
+                if (skipCtr < (33 << 6)) skipCtr++;
                 pos += step;
                 if (pos > safeMain) break;
                 missBytes = recoverMixedBoundary ? 125 : missBytes + step;
@@ -599,7 +599,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 pos++;
             } else {
                 int step = (skipCtr >> 6) + 1;
-                if (skipCtr < (17 << 6)) skipCtr++;
+                if (skipCtr < (33 << 6)) skipCtr++;
                 missBytes += step;
                 pos += step;
             }
@@ -713,7 +713,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 pos++;
             } else {
                 int step = (skipCtr >> 6) + 1;
-                if (skipCtr < (17 << 6)) skipCtr++;
+                if (skipCtr < (33 << 6)) skipCtr++;
                 missBytes += step;
                 pos += step;
             }
