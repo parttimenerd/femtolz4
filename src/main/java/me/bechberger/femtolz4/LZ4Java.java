@@ -140,7 +140,8 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     public static byte[] decompressJava(byte[] src, int decompressedSize) {
         byte[] dst = new byte[decompressedSize];
         int n = decompressJavaImpl(src, 0, src.length, dst, 0, decompressedSize, 0);
-        return Arrays.copyOf(dst, n);
+        // Full-buffer output is the norm: skip the extra array + full copy.
+        return n == decompressedSize ? dst : Arrays.copyOf(dst, n);
     }
 
     /**
