@@ -316,8 +316,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                    skipped positions are never written to head/tail together, so
                    chain integrity is kept, and long repeats are re-found via the
                    far end anyway. */
-                int iStep = matchLen <= 128 ? 2 : (matchLen <= 1024 ? 8 : 32);
-                for (int ip = insertStart; ip < insertEnd; ip += iStep) {
+                /* Insertion stride: constant 2; see docs/PERF_LOG.md (bisect-1..4:
+                   match-length-scaled stride cost -25% on 160MB JFR gc@8). */
+                for (int ip = insertStart; ip < insertEnd; ip += 2) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
                     int prev2 = head[h2];
@@ -837,14 +838,10 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     }
 
     static int writeOverflow(byte[] dst, int op, int rem) {
-        if (rem >= 255) {
-            // Vectorized fill beats a 255-per-iteration byte loop on long runs
-            // (JFR: ~6% of text-like compress at chain=1 came from this loop).
-            int n = rem / 255;
-            Arrays.fill(dst, op, op + n, (byte) 255);
-            op += n;
-            rem -= n * 255;
-        }
+        /* Plain byte loop. An Arrays.fill(255-runs) variant (E14) measured
+           -17% on 160MB JFR gc data @8 (DualBench bisect-3) — fill's per-call
+           intrinsic overhead dominates the short runs that dominate real data. */
+        for (; rem >= 255; rem -= 255) dst[op++] = (byte) 255;
         dst[op++] = (byte) rem;
         return op;
     }
