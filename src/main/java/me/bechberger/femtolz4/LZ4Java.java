@@ -845,7 +845,21 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
      */
     static int extendMatch(byte[] src, int sv, int pos, int maxMatch) {
         int len = MIN_MATCH;
-        while (len + 16 <= maxMatch) {
+        while (len + 32 <= maxMatch) {
+            long d1 = (long) LONG_LE.get(src, sv + len)      ^ (long) LONG_LE.get(src, pos + len);
+            long d2 = (long) LONG_LE.get(src, sv + len + 8)  ^ (long) LONG_LE.get(src, pos + len + 8);
+            long d3 = (long) LONG_LE.get(src, sv + len + 16) ^ (long) LONG_LE.get(src, pos + len + 16);
+            long d4 = (long) LONG_LE.get(src, sv + len + 24) ^ (long) LONG_LE.get(src, pos + len + 24);
+            if ((d1 | d2 | d3 | d4) != 0L) {
+                if (d1 != 0L) { len += Long.numberOfTrailingZeros(d1) >>> 3; return len; }
+                if (d2 != 0L) { len += 8  + (Long.numberOfTrailingZeros(d2) >>> 3); return len; }
+                if (d3 != 0L) { len += 16 + (Long.numberOfTrailingZeros(d3) >>> 3); return len; }
+                len += 24 + (Long.numberOfTrailingZeros(d4) >>> 3);
+                return len;
+            }
+            len += 32;
+        }
+        if (len + 16 <= maxMatch) {
             long d1 = (long) LONG_LE.get(src, sv + len)     ^ (long) LONG_LE.get(src, pos + len);
             long d2 = (long) LONG_LE.get(src, sv + len + 8) ^ (long) LONG_LE.get(src, pos + len + 8);
             if ((d1 | d2) != 0L) {

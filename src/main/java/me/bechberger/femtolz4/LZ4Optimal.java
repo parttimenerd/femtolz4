@@ -36,10 +36,16 @@ final class LZ4Optimal {
     private static final int HASH_BITS     = 16;
     private static final int HASH_SIZE     = 1 << HASH_BITS;
     private static final int NIL           = Integer.MIN_VALUE;
-    /** Chain probes per position. Higher = better ratio, slower. */
+    /** Chain probes per position outside a long match. Higher = better ratio, slower. */
     private static final int ATTEMPTS      = 1024;
-    /** DP chunk length (positions); literals flow across via deferred flush. */
-    private static final int CHUNK         = 1 << 20;
+    /** Shifted candidates at least this long skip alternative search entirely. */
+    private static final int LONG_SHIFT    = 128;
+    /** Probes for alternatives when the shifted candidate is shorter than LONG_SHIFT. */
+    private static final int EXTRA_ATTEMPTS = 32;
+    /** DP chunk length (positions); literals flow across via deferred flush.
+        4 MiB chunks keep chunk-boundary match splits rare (multi-megabyte runs
+        otherwise pay ~3 B per 1 MiB split) at ~64 MB working set. */
+    private static final int CHUNK         = 4 << 20;
 
     private LZ4Optimal() {}
 
@@ -56,6 +62,11 @@ final class LZ4Optimal {
 
         int op = dstOff;
         int litStart = srcOff;                           // pending literals cross chunks
+
+        /* Run-shift shortcut state, carried across chunks: when the 4-gram at pos
+           repeats the one at pos-1, (shiftOff, shiftTrue-1) is a guaranteed
+           candidate without walking the chain again. */
+        int shiftTrue = 0, shiftOff = 0;
 
         for (int cStart = srcOff; cStart < srcEnd; ) {
             int cLen = Math.min(CHUNK, srcEnd - cStart);
@@ -81,30 +92,64 @@ final class LZ4Optimal {
 
                 int maxMatch = Math.min(safeEnd, matchEndCap) - pos;
                 if (maxMatch >= MIN_MATCH) {
+                    int lenCap = Math.min(maxMatch, cEnd - pos); // room left in chunk
                     int bestLen = MIN_MATCH - 1;         // record-improvement threshold
-                    int attemptsLeft = ATTEMPTS;
+                    int bestOff = 0;
+                    int trueLen = 0;
+                    int attempts = ATTEMPTS;
+                    /* Universal shift guarantee: if (shiftOff, shiftTrue) matched at
+                       pos-1, then (shiftOff, shiftTrue-1) matches here — the bytes
+                       are equal by construction. Long shifts skip the walk; short
+                       shifts still search a few alternatives (ratio), but at a
+                       fraction of the probe budget (speed). */
+                    if (shiftTrue > MIN_MATCH) {
+                        int len = (int) Math.min((long) shiftTrue - 1, (long) lenCap);
+                        if (len >= MIN_MATCH) {
+                            if (poolSize == pool.length) pool = grow(pool);
+                            pool[poolSize++] = ((long) len << 32) | shiftOff;
+                            bestLen = len;
+                            bestOff = shiftOff;
+                            trueLen = shiftTrue - 1;
+                            if (len >= LONG_SHIFT) {
+                                shiftTrue--;         // consume one byte of the run
+                                candStart[pos - cStart + 1] = poolSize;
+                                continue;
+                            }
+                            attempts = EXTRA_ATTEMPTS;
+                        } else {
+                            shiftTrue = 0;
+                        }
+                    }
+                    int attemptsLeft = attempts;
                     for (int sv = prev; sv > limit && attemptsLeft-- > 0; ) {
                         long tslot = tail[sv & (LZ4.WINDOW_SIZE - 1)];
                         int  sv4   = (int) (tslot >>> 32);
                         int  next  = (int) tslot;
                         if (sv4 == pos4
                                 && (bestLen < MIN_MATCH
-                                    || src[sv + bestLen] == src[pos + bestLen])) {
+                                    || (bestLen < lenCap
+                                        && src[sv + bestLen] == src[pos + bestLen]))) {
                             int len = LZ4Java.extendMatch(src, sv, pos, maxMatch);
-                            len = Math.min(len, cEnd - pos);         // chunk clamp
                             if (len > bestLen) {
-                                if (poolSize == pool.length) {
-                                    long[] np = new long[pool.length + (pool.length >>> 1) + 64];
-                                    System.arraycopy(pool, 0, np, 0, pool.length);
-                                    pool = np;
-                                }
-                                pool[poolSize++] = ((long) len << 32) | (pos - sv);
-                                bestLen = len;
-                                if (len >= maxMatch) break;          // can't improve
+                                if (poolSize == pool.length) pool = grow(pool);
+                                pool[poolSize++] = ((long) Math.min(len, lenCap) << 32) | (pos - sv);
+                                bestLen = len;                      // TRUE len drives the walk
+                                bestOff = pos - sv;
+                                trueLen = len;
+                                if (len >= lenCap) break;            // can't improve
                             }
                         }
                         sv = next;
                     }
+                    /* Seed the shift shortcut for the next position. */
+                    if (bestLen >= MIN_MATCH) {
+                        shiftTrue = trueLen;
+                        shiftOff  = bestOff;
+                    } else {
+                        shiftTrue = 0;
+                    }
+                } else {
+                    shiftTrue = 0;
                 }
                 candStart[pos - cStart + 1] = poolSize;
             }
@@ -157,5 +202,11 @@ final class LZ4Optimal {
         int e = len - MIN_MATCH;
         int eb = e >= 15 ? 1 + (e - 15) / 255 : 0;
         return 3 + eb;
+    }
+
+    private static long[] grow(long[] pool) {
+        long[] np = new long[pool.length + (pool.length >>> 1) + 64];
+        System.arraycopy(pool, 0, np, 0, pool.length);
+        return np;
     }
 }
