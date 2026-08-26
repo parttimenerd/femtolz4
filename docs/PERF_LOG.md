@@ -298,3 +298,38 @@ Speculating the pos+1 probe costs 2 loads + a multiply per iteration even on
 the dominant probe-1-hit path; deferring it wins on long-literal corpora
 (serial-gc +19%, json-10m +19%) at a -5% cost on ultra-fast text (wat,
 already 1.4 GB/s). Outputs byte-identical; tests+RT green.
+
+## E44/E45 (REJECTED): chain candidate-loop restructure
+Hoisted pos-invariant maxMatch + folded the duplicated miss-path exit into one.
+Byte-identical output but -24% compress@8 on wat-160m (4/4 windows). C2 clearly
+schedules the two-exit shape better; reverted.
+
+## E46 (REJECTED): wider lazy matching at chain>=8
+lazyLimit 8->16, lazyDepth 2->4. wat@8: ratio +1.1% for -1.5% speed (ok-ish),
+but serial-gc@8: +0.25% ratio for -18% speed. Reverted; level 10 remains the
+max-ratio answer.
+
+## E47 (REJECTED): drop src[sv+bestLen] prefilter in chain walk
+extendMatch's 16-byte tier subsumes the mismatch check in principle, but the
+extra extendMatch invocations cost -17% @8 on serial-gc (byte-identical).
+The prefilter is a real filter; reverted.
+
+## E43 (REVERTED after corpus widening)
+Lazy probe-2 (+19% serial-gc/json, -5% wat) turned out to be -32% on
+mixed-20m@1: on miss-heavy data the speculative pos+1 load was hiding the
+table-load latency; deferring it serializes two dependent loads per miss.
+Full check of E42-only (838a57f) vs original 51f3a6d, compress@1:
+  mixed 1.247 | serial-gc 1.105 | json 1.155 | rle 1.466 | wat-160m 1.147
+  geomean +21.8%, every corpus positive  -> E42 stays, E43 out.
+
+## E48 (REJECTED): skip mid-match insertions for matchLen>=32
+-14.5% compress@8 on serial-gc AND slightly worse ratio (2.192->2.189):
+interior positions do get traversed on this corpus. Reverted.
+
+## FINAL cumulative vs original 51f3a6d (state = 838a57f + reverts)
+c@1: jfr-serial +10.5%, json +15.5%, rle +46.6%, wat-160m +14.7%, mixed +24.7%
+c@8: jfr-serial -6.8%, wat -12.3%, json -14.8%, mixed +11.8%, rle +14.0%
+d@1: jfr-serial +48.3%, json +47.4%, mixed +41.0%, rle +1.2%
+d@8: jfr-serial +51.1%, json +11.8%, mixed +46.9%, rle +1.5%
+(all DualBench medians, byte-identical output; c@8 residual = layout drift,
+ every algorithmic revert measured worse)
