@@ -795,20 +795,19 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
 
             int matchSrc = op - offset;
             if (matchSrc < matchLowerBound) throw new LZ4Exception("match before buffer start");
-            if ((long) op + matchLen > dstEnd) throw new LZ4Exception("output overflow in match");
             int iMatchLen = (int) matchLen;
             if (offset >= 8 && iMatchLen <= 16 && op + 16 <= dstEnd) {
-                // Wild copy for the dominant case: two fixed 8-byte moves replace
-                // the variable-length arraycopy dispatch. Overshoot stays within
-                // dstEnd and is overwritten by subsequent output.
+                /* Wild copy, dominant on real data: the arm's own op+16<=dstEnd
+                   check subsumes the generic output-overflow guard. */
                 LONG_LE.set(dst, op,     (long) LONG_LE.get(dst, matchSrc));
                 LONG_LE.set(dst, op + 8, (long) LONG_LE.get(dst, matchSrc + 8));
-            } else if (offset >= iMatchLen) {
+            } else if (offset >= iMatchLen && (long) op + matchLen <= dstEnd) {
                 // Non-overlapping: arraycopy is a JVM intrinsic — faster than
                 // the hand-unrolled VarHandle ladder for all lengths because it
                 // avoids per-element bounds checks and VarHandle dispatch overhead.
                 System.arraycopy(dst, matchSrc, dst, op, iMatchLen);
             } else {
+                if ((long) op + matchLen > dstEnd) throw new LZ4Exception("output overflow in match");
                 copyMatch(dst, matchSrc, op, iMatchLen);
             }
             op += iMatchLen;

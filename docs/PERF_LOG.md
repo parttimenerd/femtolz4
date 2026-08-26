@@ -267,3 +267,9 @@ fill-free table stands for all sizes.
 160MB slices x3 JFR gc_details; wat-jfrtofp-160m (structured text,
 ratio 6.5/9.8); gitpack-79m (zlib blobs, ratio ~1.0); cjfr-gcdet-g1-41m
 (pre-compressed JFR, ratio 1.04); onnx-t5-40m (binary floats, ratio 1.04/1.17).
+
+## E38 (KEPT): match output-overflow guard elided in wild-copy arm
+The generic op+matchLen>dstEnd guard ran for every sequence; the wild-copy arm
+(offset>=8 && len<=16 && op+16<=dstEnd) already implies it. Guard moved into
+the arraycopy/copyMatch arms only. DualBench decode: serial-gc@8 +6.3%
+(on top of E37's +9.8%), serial-160m@1 +11% — windows consistent.
