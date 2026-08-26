@@ -131,3 +131,40 @@ JFR on text decode: copyMatch = 80% of samples.
 - E12: (stretch) NEON 16B match extension for darwin-aarch64 C encoder
 - E13: adaptive hash size for chain path by block size
 
+
+## Second night: real-data phase (2026-08-26)
+
+New benchmark reality: switched from synthetic corpora to REAL JFR recordings
+from ../condensed-data/benchmark (Renaissance suite: all_gc_*, all_profile_G1,
+fj-kmeans, movie-lens, scala-stm-bench7; 10-83 MB each). Synthetic text/rle
+corpora have extreme match lengths (ratio ~254) that made extendMatch dominate
+and misled tuning that does not transfer to real data.
+
+JFR profile of HEAD(37ea025) on synthetic corpus (prof4-*):
+- compress text@1: 92.8% extendMatch line 861 (all-equal long-match loop),
+  6.0% writeOverflow 255-loop.
+- compress text@8: 90.8% compressJavaImpl line 312 = post-match hash-insertion
+  loop (O(matchLen) inserts per emitted match).
+- decompress text@1: 47% copyMatch; 'ProfileDriver.main' 32-41% = destination
+  array zeroing + caller loop (benchmark artifact, same for A and B).
+
+### E12 (REVERTED): tiered extendMatch 32B->64B stride at len>=68
+Hypothesis from synthetic profile. Real-data A/B (jfr1 pair): chain=1
+regressed; the tier setup cost exceeds wins when real-world matches are mostly
+< 68 bytes. Reverted before commit.
+
+### E13 (KEPT, in working tree): stride-scaled post-match insertion
+`for (ip=insertStart; ip<insertEnd; ip+=2)` -> iStep = 2 (matchLen<=128),
+8 (<=1024), 32 (>1024). Skipped (head,tail) entries are never written, chain
+integrity keeps. Targets the 90.8% chain-mode hotspot above.
+jfr1 (stacked with E12/E14): compress +5.8..+10.2% on ALL real files, both
+chain 1 and 8 (chain=8 +7..10% attributable to E13).
+
+### E14 (KEPT): writeOverflow via Arrays.fill for 255-runs
+Targets 6% hotspot on long-match compress; near-neutral on real data but tiny
+and safe, helps long-match cases.
+
+### Watch: decompress -4.5..-6% on some real files in jfr1
+None of E12-E14 touch decode; candidate causes: sequence-structure change from
+E13 (more/shorter matches), or JIT layout drift across jar rebuilds. jfr2 pair
+(E13+E14 only, vs 37ea025) re-measures to attribute.

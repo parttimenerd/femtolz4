@@ -309,7 +309,14 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 // If lazy probed but lost, pos+1 was already inserted; start at pos+2
                 // to avoid reinserting it (which can create a self-link in the chain).
                 int insertStart = pos + 1 + (lazyProbed ? 1 : 0);
-                for (int ip = insertStart; ip < insertEnd; ip += 2) {
+                /* Long matches: JFR shows this insertion loop at ~90% of chain-mode
+                   compress on long-match data — it costs O(matchLen) hash inserts
+                   for a single emitted match. Widen the stride for long matches;
+                   skipped positions are never written to head/tail together, so
+                   chain integrity is kept, and long repeats are re-found via the
+                   far end anyway. */
+                int iStep = matchLen <= 128 ? 2 : (matchLen <= 1024 ? 8 : 32);
+                for (int ip = insertStart; ip < insertEnd; ip += iStep) {
                     int ip4 = (int) INT_LE.get(src, ip);
                     int h2  = (ip4 * 0x9E3779B9) >>> (32 - HASH_BITS);
                     int prev2 = head[h2];
@@ -829,7 +836,14 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     }
 
     static int writeOverflow(byte[] dst, int op, int rem) {
-        for (; rem >= 255; rem -= 255) dst[op++] = (byte) 255;
+        if (rem >= 255) {
+            // Vectorized fill beats a 255-per-iteration byte loop on long runs
+            // (JFR: ~6% of text-like compress at chain=1 came from this loop).
+            int n = rem / 255;
+            Arrays.fill(dst, op, op + n, (byte) 255);
+            op += n;
+            rem -= n * 255;
+        }
         dst[op++] = (byte) rem;
         return op;
     }
