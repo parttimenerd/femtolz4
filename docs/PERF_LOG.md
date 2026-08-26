@@ -358,3 +358,13 @@ d@1: jfr-serial 1.447 | json 1.359 | mixed 1.465 | rle 1.038   geomean +31%
 d@8: jfr-serial 1.531 | json 1.121 | mixed 1.460 | rle 1.031   geomean +28%
 Ratios: identical everywhere except c@8 wat -0.86% (E55) and c@1 ratio
 slightly BETTER (E50 13-bit). Level 10: +1.5..2.6% ratio over level 9.
+
+## E55 also validated at level 9 (chain=256)
+serial-gc c@9: +6.3% median, ratio 2.19427->2.19412 (negligible). Early exit
+at len>=64 keeps paying off at deeper chains.
+
+## Level map note
+Public levels: 1,2 -> fast(1); 3->4; 4->8; 5->16; 6->32; 7->64; 8->128;
+9->256; 10->OPTIMAL. compressChain2 (chain==2) currently unreachable from
+public levels. Frame write() already compresses directly from caller buffer
+for full blocks (no double-copy); XXHash32 only fires with checksums enabled.
