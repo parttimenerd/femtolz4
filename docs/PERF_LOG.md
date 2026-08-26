@@ -347,3 +347,14 @@ JFR on c@8 wat: chain walk + extendMatch ~45% of samples; most extra candidates
 never beat a >=64B match. c@8: wat +12.9% (ratio -0.86%), serial-gc +5.9%
 (ratio -0.007%), json -0.4% (identical), mixed -4.2% (identical).
 T=24 measured +44%/-4.8% on wat: too much ratio loss -> 64.
+
+## FINAL cumulative vs original 51f3a6d (state a26d89d, DualBench medians)
+c@1: jfr-serial 1.200 | wat-160m 1.129 | json 1.124 | mixed 1.255 | rle 1.443
+     geomean +22.5%
+c@8: jfr-serial 0.893 | wat-160m 1.006 | json 0.858 | mixed 1.111 | rle 1.040
+     geomean -2.3% (json/serial-gc residual = byte-identical C2 layout drift;
+     null-calibration shows ~2% slot bias on this host)
+d@1: jfr-serial 1.447 | json 1.359 | mixed 1.465 | rle 1.038   geomean +31%
+d@8: jfr-serial 1.531 | json 1.121 | mixed 1.460 | rle 1.031   geomean +28%
+Ratios: identical everywhere except c@8 wat -0.86% (E55) and c@1 ratio
+slightly BETTER (E50 13-bit). Level 10: +1.5..2.6% ratio over level 9.
