@@ -26,11 +26,17 @@ public final class LZ4 {
     /** Default compression level (lz4hc, chain=256). Matches {@code lz4} CLI default. */
     public static final int LEVEL_DEFAULT = 9;
     /**
-     * Maximum compression level accepted by {@link #compressor(int)}.
-     * Levels 1–9 use hash-chain compression; level 9 is the practical
-     * ceiling for LZ4 compression ratio.
+     * Maximum greedy hash-chain level; the practical speed/ratio ceiling of
+     * the fast parser.
      */
     public static final int LEVEL_MAX   = 9;
+    /**
+     * Optimal-parse level ("compress as much as possible", valid LZ4 format):
+     * backward dynamic program over a full-window hash-chain search per position.
+     * Much slower and memory-hungrier (~28 B/byte input) than levels 1–9;
+     * use when ratio matters more than speed.
+     */
+    public static final int LEVEL_OPTIMAL = 10;
 
     /**
      * Compressor handle returned by the factory methods, compatible with the
@@ -102,7 +108,7 @@ public final class LZ4 {
      */
     public static Compressor compressor(int level) {
         int chain = levelToChain(level);
-        if (NativeLZ4.AVAILABLE && chain > 0) {
+        if (NativeLZ4.AVAILABLE && chain > 0 && chain != LZ4Java.OPTIMAL_CHAIN) {
             return (src, srcOff, srcLen, dst, dstOff, maxDestLen) -> {
                 int repeatedSamples = (srcLen >= X86_NATIVE_CHAIN_SAMPLE_MIN)
                     ? LZ4Java.countRepeatedSamples(src, srcOff, srcLen) : 0;
@@ -135,7 +141,7 @@ public final class LZ4 {
     }
 
     private static int levelToChain(int level) {
-        level = Math.max(LEVEL_FAST, Math.min(LEVEL_MAX, level));
+        level = Math.max(LEVEL_FAST, Math.min(LEVEL_OPTIMAL, level));
         return switch (level) {
             case 1, 2 -> 1;
             case 3    -> 4;
@@ -144,7 +150,8 @@ public final class LZ4 {
             case 6    -> 32;
             case 7    -> 64;
             case 8    -> 128;
-            default   -> 256; // 9
+            case 9    -> 256;
+            default   -> LZ4Java.OPTIMAL_CHAIN; // 10 = LEVEL_OPTIMAL
         };
     }
 

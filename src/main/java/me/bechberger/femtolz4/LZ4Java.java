@@ -17,6 +17,7 @@ import java.util.Arrays;
  */
 public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
 
+    static final VarHandle SHORT_LE = MethodHandles.byteArrayViewVarHandle(short[].class, ByteOrder.LITTLE_ENDIAN);
     static final VarHandle INT_LE  = MethodHandles.byteArrayViewVarHandle(int[].class,  ByteOrder.LITTLE_ENDIAN);
     static final VarHandle LONG_LE = MethodHandles.byteArrayViewVarHandle(long[].class, ByteOrder.LITTLE_ENDIAN);
 
@@ -36,6 +37,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     private static final int HASH_BITS_FAST  = 12;
     private static final int HASH_SIZE_FAST  = 1 << HASH_BITS_FAST;
 
+    /** Chain marker for the optimal-parse mode (see {@link LZ4Optimal}). */
+    static final int OPTIMAL_CHAIN = Integer.MAX_VALUE;
+
     /**
      * Compression level: 0 = 2-way fast, 1 = fast, 2+ = chain depth.
      */
@@ -50,14 +54,15 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     /**
      * Create a pure-Java compressor/decompressor at the given chain depth.
      *
-     * @param maxChain 0 = 2-way fast, 1 = fast, 2–256 = chain depth
+     * @param maxChain 0 = 2-way fast, 1 = fast, 2–256 = chain depth,
+     *                 {@link #OPTIMAL_CHAIN} = optimal parsing
      */
     public LZ4Java(int maxChain) {
         this.maxChain  = maxChain;
         fastHead   = (maxChain == 1)  ? new long[HASH_SIZE_FAST]     : null;
         fast2Head  = (maxChain == 0)  ? new long[HASH_SIZE_FAST * 2] : null;
-        chainHead  = (maxChain >= 2)  ? new int[HASH_SIZE]           : null;
-        chainTail  = (maxChain >= 2)  ? new long[WINDOW_SIZE]        : null;
+        chainHead  = (maxChain >= 2 && maxChain != OPTIMAL_CHAIN) ? new int[HASH_SIZE]    : null;
+        chainTail  = (maxChain >= 2 && maxChain != OPTIMAL_CHAIN) ? new long[WINDOW_SIZE] : null;
     }
 
     /**
@@ -162,6 +167,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             dst[dstOff] = (byte) (srcLen << 4);
             copyLiterals(src, srcOff, dst, dstOff + 1, srcLen);
             return srcLen + 1;
+        }
+        if (chain == OPTIMAL_CHAIN) {
+            return LZ4Optimal.compress(src, srcOff, srcLen, dst, dstOff);
         }
         if (chain <= 0) {
             return compressFast2Way(src, srcOff, srcLen, dst, dstOff);
@@ -294,8 +302,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
-                dst[op++] = (byte)  matchDist;
-                dst[op++] = (byte) (matchDist >>> 8);
+                SHORT_LE.set(dst, op, (short) matchDist); op += 2;
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
@@ -444,8 +451,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15)    op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
-                dst[op++] = (byte)  matchDist;
-                dst[op++] = (byte) (matchDist >>> 8);
+                SHORT_LE.set(dst, op, (short) matchDist); op += 2;
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 int insertEnd   = litStart < safeEnd + 1 ? litStart : safeEnd + 1;
@@ -528,8 +534,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
-                dst[op++] = (byte) matchDist;
-                dst[op++] = (byte) (matchDist >>> 8);
+                SHORT_LE.set(dst, op, (short) matchDist); op += 2;
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 pos = litStart;
@@ -569,8 +574,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                 dst[op++] = token(litLen, matchExtra);
                 if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                 op = copyLiterals(src, litStart, dst, op, litLen);
-                dst[op++] = (byte) matchDist;
-                dst[op++] = (byte) (matchDist >>> 8);
+                SHORT_LE.set(dst, op, (short) matchDist); op += 2;
                 if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                 litStart = pos + matchLen;
                 pos = litStart;
@@ -604,14 +608,16 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
         return op - dstOff;
     }
 
-    /* chain=1: long[4096] storing (v4<<32|pos). Sentinel low 32 bits = srcOff-WINDOW_SIZE-1.
-       Window check first (cheap), then v4 fingerprint check avoids src[] read on most misses. */
+    /* chain=1: long[4096] storing (v4<<32|pos). The table is NOT cleared between
+       calls: stale slots fail the v4 fingerprint check with probability ~1-2^-32,
+       and a candidate is only accepted after bounds re-checks (sv in the current
+       block, offset in window) and re-reading the 4 bytes at sv, which fully
+       determines match validity (extendMatch never re-verifies the first 4).
+       Saves a 32 KiB fill per call (10.5% of samples at chain=1 on json-10m). */
     private int compressFast(byte[] src, int srcOff, int srcLen,
                              byte[] dst, int dstOff) {
         if (srcLen == 0) return 0;
         long[] head = fastHead;
-        long sentinel = (long)(srcOff - WINDOW_SIZE - 1) & 0xFFFFFFFFL;
-        Arrays.fill(head, sentinel);
 
         int op        = dstOff;
         int litStart  = srcOff;
@@ -635,7 +641,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             long slot1 = head[h1];
 
             int sv = (int) slot;
-            if ((pos - sv) < WINDOW_SIZE && (int)(slot >>> 32) == v4) {
+            if ((int)(slot >>> 32) == v4 && sv >= srcOff
+                    && pos - sv >= 1 && pos - sv < WINDOW_SIZE
+                    && (int) INT_LE.get(src, sv) == v4) {
                 int maxMatch = safeEnd - pos;
                 int len = extendMatch(src, sv, pos, maxMatch);
 
@@ -648,8 +656,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                     dst[op++] = token(litLen, matchExtra);
                     if (litLen >= 15) op = writeOverflow(dst, op, litLen - 15);
                     op = copyLiterals(src, litStart, dst, op, litLen);
-                    dst[op++] = (byte) matchDist;
-                    dst[op++] = (byte) (matchDist >>> 8);
+                    SHORT_LE.set(dst, op, (short) matchDist); op += 2;
                     if (matchExtra >= 15) op = writeOverflow(dst, op, matchExtra - 15);
                     litStart = pos + len;
                     pos = litStart;
@@ -666,7 +673,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
 
             int sv1 = (int) slot1;
-            if ((pos - sv1) < WINDOW_SIZE && (int)(slot1 >>> 32) == v4_1) {
+            if ((int)(slot1 >>> 32) == v4_1 && sv1 >= srcOff
+                    && pos - sv1 >= 1 && pos - sv1 < WINDOW_SIZE
+                    && (int) INT_LE.get(src, sv1) == v4_1) {
                 int maxMatch1 = safeEnd - pos;
                 int len1 = extendMatch(src, sv1, pos, maxMatch1);
 
@@ -679,8 +688,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
                     dst[op++] = token(litLen1, matchExtra1);
                     if (litLen1 >= 15) op = writeOverflow(dst, op, litLen1 - 15);
                     op = copyLiterals(src, litStart, dst, op, litLen1);
-                    dst[op++] = (byte) matchDist1;
-                    dst[op++] = (byte) (matchDist1 >>> 8);
+                    SHORT_LE.set(dst, op, (short) matchDist1); op += 2;
                     if (matchExtra1 >= 15) op = writeOverflow(dst, op, matchExtra1 - 15);
                     litStart = pos + len1;
                     pos = litStart;
@@ -742,7 +750,10 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             if ((long) op + litLen > dstEnd) throw new LZ4Exception("output overflow in literals");
             if ((long) ip + litLen > srcEnd) throw new LZ4Exception("input underflow in literals");
             int iLitLen = (int) litLen;
-            if (litLen <= 16 && op + 16 <= dstEnd && ip + 16 <= srcEnd) {
+            if (iLitLen == 0) {
+                // Dense match chains (e.g. JSON) have mostly empty literal runs;
+                // don't pay the wild copy's 32 bytes of memory traffic for nothing.
+            } else if (litLen <= 16 && op + 16 <= dstEnd && ip + 16 <= srcEnd) {
                 /* Wild copy: two fixed 8-byte moves cover any 0-16 byte literal run
                    without per-length branching (JFR data: 95%+ of runs are <= 16 bytes).
                    Overshoot bytes stay within dstEnd and are overwritten by the
@@ -798,6 +809,10 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
     }
 
     static int copyLiterals(byte[] src, int srcPos, byte[] dst, int dstPos, int litLen) {
+        if (litLen == 0) {
+            // Common on dense match chains; the wild copy would still move 32B.
+            return dstPos;
+        }
         if (litLen <= 16 && srcPos + 16 <= src.length && dstPos + 16 <= dst.length) {
             /* Wild copy: two fixed 8-byte moves cover any 0-16 byte literal run
                without per-length branching; overshoot bytes are rewritten by the
@@ -806,33 +821,10 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             LONG_LE.set(dst, dstPos + 8, (long) LONG_LE.get(src, srcPos + 8));
             return dstPos + litLen;
         }
-        if (litLen >= 16) {
-            if (litLen <= 32) {
-                LONG_LE.set(dst, dstPos,      (long) LONG_LE.get(src, srcPos));
-                LONG_LE.set(dst, dstPos + 8,  (long) LONG_LE.get(src, srcPos + 8));
-                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
-                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
-            } else if (litLen <= 64) {
-                LONG_LE.set(dst, dstPos,           (long) LONG_LE.get(src, srcPos));
-                LONG_LE.set(dst, dstPos + 8,       (long) LONG_LE.get(src, srcPos + 8));
-                LONG_LE.set(dst, dstPos + 16,      (long) LONG_LE.get(src, srcPos + 16));
-                LONG_LE.set(dst, dstPos + 24,      (long) LONG_LE.get(src, srcPos + 24));
-                LONG_LE.set(dst, dstPos + litLen - 32, (long) LONG_LE.get(src, srcPos + litLen - 32));
-                LONG_LE.set(dst, dstPos + litLen - 24, (long) LONG_LE.get(src, srcPos + litLen - 24));
-                LONG_LE.set(dst, dstPos + litLen - 16, (long) LONG_LE.get(src, srcPos + litLen - 16));
-                LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
-            } else {
-                System.arraycopy(src, srcPos, dst, dstPos, litLen);
-            }
-        } else if (litLen >= 8) {
-            LONG_LE.set(dst, dstPos,               (long) LONG_LE.get(src, srcPos));
-            LONG_LE.set(dst, dstPos + litLen - 8,  (long) LONG_LE.get(src, srcPos + litLen - 8));
-        } else if (litLen >= 4) {
-            INT_LE.set(dst, dstPos,               (int) INT_LE.get(src, srcPos));
-            INT_LE.set(dst, dstPos + litLen - 4,  (int) INT_LE.get(src, srcPos + litLen - 4));
-        } else {
-            for (int i = 0; i < litLen; i++) dst[dstPos + i] = src[srcPos + i];
-        }
+        /* Longer runs (and the in-bounds-guard-failing tails): arraycopy is a
+           vectorized intrinsic and beats a hand-unrolled VarHandle ladder whose
+           every access pays dispatch + bounds checks. */
+        System.arraycopy(src, srcPos, dst, dstPos, litLen);
         return dstPos + litLen;
     }
 
@@ -842,7 +834,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
         return op;
     }
 
-    private static byte token(int litLen, int matchExtra) {
+    static byte token(int litLen, int matchExtra) {
         return (byte) (((litLen < 15 ? litLen : 15) << 4) | (matchExtra < 15 ? matchExtra : 15));
     }
 
@@ -851,7 +843,7 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
      * Returns the total match length. maxMatch = safeEnd - pos.
      * Uses 16-byte XOR steps for long matches (helps AArch64 NEON pipelining).
      */
-    private static int extendMatch(byte[] src, int sv, int pos, int maxMatch) {
+    static int extendMatch(byte[] src, int sv, int pos, int maxMatch) {
         int len = MIN_MATCH;
         while (len + 16 <= maxMatch) {
             long d1 = (long) LONG_LE.get(src, sv + len)     ^ (long) LONG_LE.get(src, pos + len);
@@ -890,29 +882,21 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             int d = dst, end = dst + len;
             while (d + 8 <= end) { LONG_LE.set(buf, d, pattern); d += 8; }
             while (d < end) { buf[d] = buf[d - offset]; d++; }
-        } else if (offset >= 8) {
-            /* src advances in lockstep — after offset bytes it reads previously-written output. */
-            int d = dst, end = dst + len;
-            while (d + 16 <= end) {
-                LONG_LE.set(buf, d,     (long) LONG_LE.get(buf, src));
-                LONG_LE.set(buf, d + 8, (long) LONG_LE.get(buf, src + 8));
-                src += 16; d += 16;
-            }
-            while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, src)); src += 8; d += 8; }
-            while (d < end) { buf[d++] = buf[src++]; }
         } else {
-            /* Offset 3..7: prime an offset-sized tile, double until ≥8 bytes primed,
-               then stride forward reading from d-c (c = primed block size, a multiple
-               of offset, so pattern alignment is preserved without out-of-bounds reads). */
-            int d   = dst;
-            int end = dst + len;
-            for (int i = 0; i < offset; i++) buf[d + i] = buf[src + i];
-            int c = offset;
-            while (c < 8 && c + c <= len) { System.arraycopy(buf, d, buf, d + c, c); c += c; }
-            if (c < 8 && d + 8 <= end) { System.arraycopy(buf, d, buf, d + c, 8 - c); c = 8; }
-            d += c;
-            while (d + 8 <= end) { LONG_LE.set(buf, d, (long) LONG_LE.get(buf, d - c)); d += 8; }
-            while (d < end) { buf[d] = buf[d - offset]; d++; }
+            /* Any offset >= 3 with offset < len: prime the first `offset` bytes
+               (phase-aligned tile), then grow geometrically via arraycopy. Every
+               step reads only already-written output, and the copy length is a
+               multiple of offset until the final partial step, so the pattern
+               phase is preserved. arraycopy is a vectorized intrinsic and the
+               step count is logarithmic in len — no store->load forwarding chain
+               like a fixed 8/16-byte lockstep loop has for offsets < 16. */
+            System.arraycopy(buf, src, buf, dst, offset);
+            int written = offset;
+            while (written < len) {
+                int k = written < len - written ? written : len - written;
+                System.arraycopy(buf, dst, buf, dst + written, k);
+                written += k;
+            }
         }
     }
 
