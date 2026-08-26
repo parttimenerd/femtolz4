@@ -292,3 +292,9 @@ Pre-clear fastHead with EMPTY_SLOT per call; probe guard collapses from
 (v4-match && sv>=srcOff && delta>=1 && delta<WINDOW && src re-read) to
 (v4-match && delta<WINDOW). Ratios identical everywhere; json-10m@1 +10.8%,
 wat-160m@1 +3.8%, serial-gc@1 neutral. Tests+RT green.
+
+## E43 (KEPT): lazy probe-2 (defer h1/slot1 until probe-1 misses)
+Speculating the pos+1 probe costs 2 loads + a multiply per iteration even on
+the dominant probe-1-hit path; deferring it wins on long-literal corpora
+(serial-gc +19%, json-10m +19%) at a -5% cost on ultra-fast text (wat,
+already 1.4 GB/s). Outputs byte-identical; tests+RT green.

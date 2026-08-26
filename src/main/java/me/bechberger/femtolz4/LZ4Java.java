@@ -653,11 +653,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             long slot = head[h];
             head[h] = ((long) v4 << 32) | (pos & 0xFFFFFFFFL);
 
-            /* Speculatively load pos+1 slot while checking pos — hides second load latency. */
-            int v4_1 = (int) INT_LE.get(src, pos + 1);
-            int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
-            long slot1 = head[h1];
-
+            /* Second position only probed when the first misses — speculating
+               it costs two extra loads + a mul per iteration even on (by far
+               the dominant) probe-1-hit paths. */
             int sv = (int) slot;
             if ((int)(slot >>> 32) == v4 && pos - sv < WINDOW_SIZE) {
                 int maxMatch = safeEnd - pos;
@@ -686,6 +684,9 @@ public class LZ4Java implements LZ4.Compressor, LZ4.Decompressor {
             pos++;
             if (pos >= safeEnd2) { pos = srcEnd; break; }
 
+            int v4_1 = (int) INT_LE.get(src, pos);
+            int h1   = (v4_1 * 0x9E3779B9) >>> (32 - HASH_BITS_FAST);
+            long slot1 = head[h1];
             head[h1] = ((long) v4_1 << 32) | (pos & 0xFFFFFFFFL);
 
             int sv1 = (int) slot1;
