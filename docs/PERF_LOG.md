@@ -530,3 +530,8 @@ correctness, with perf verdict PENDING a quiet host.
   (45,579,791 both). mvn green (562 tests).
 Early perf probe below this entry (nat6-c8j.log) if readable; verdicts remain
 PENDING along with N5's.
+Probe result (nat6-c8j.log): c8-json, 6 rounds, per-window B/A
+0.888/1.007/1.055/0.950/1.095/1.004 -> median 1.007 on load~20 host
+(absolute MB/s 166-215 vs 496-530 quiet-night). No negative signal for
+N5+N6+N3 combined; consistent with byte-identical work cuts. Final verdicts
+still PENDING quiet host.
