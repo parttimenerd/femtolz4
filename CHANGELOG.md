@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Block decompression now always uses the pure-Java block decoder by default: it measured 1.5–2.5x faster than the bundled native decoder on every tested platform (macOS/aarch64, Linux/amd64). The bundled native library is still used for compression where available; native decode can be restored with `-Dfemtolz4.preferNativeDecode=true` (useful for cross-validation)
+
 ## [0.2.1] - 2026-08-25
 
 ### Added

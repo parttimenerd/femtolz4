@@ -282,6 +282,16 @@ public final class LZ4 {
 
 
     /**
+     * Prefer the bundled native block decoder despite it being slower? The
+     * pure-Java block decoder beats the bundled native port on every platform
+     * measured (1.5–2.5x, docs/PERF_LOG.md), so Java is the default; set
+     * {@code -Dfemtolz4.preferNativeDecode=true} to restore native-first decode
+     * (e.g. for cross-validation).
+     */
+    static final boolean PREFER_NATIVE_DECODE =
+            NativeLZ4.AVAILABLE && Boolean.getBoolean("femtolz4.preferNativeDecode");
+
+    /**
      * Decompress an LZ4 block from {@code src[srcOff..srcOff+srcLen)} into
      * {@code dst[dstOff..dstOff+dstLen)}.
      *
@@ -290,7 +300,7 @@ public final class LZ4 {
      */
     public static int decompress(byte[] src, int srcOff, int srcLen,
                                  byte[] dst, int dstOff, int dstLen) {
-        if (NativeLZ4.AVAILABLE) {
+        if (PREFER_NATIVE_DECODE) {
             int n = NativeLZ4.decompress(src, srcOff, srcLen, dst, dstOff, dstLen);
             if (n >= 0) return n;
         }
