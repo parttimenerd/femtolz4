@@ -414,3 +414,25 @@ frame decode was already pure Java. Malformed-input behavior unchanged:
 previously native returned <0 and the Java path then threw; Java-first throws
 directly. Full mvn suite with native built: 562 tests, 0 failures, 0 errors
 (9 deep-fuzz group skips as before).
+
+## E63 (REJECTED, both variants): Arrays.mismatch delegate for extendMatch long tier
+Motivation: prof11 put the extendMatch 16B/32B long loop at 16.4% (c1-serial);
+the JDK vectorizedMismatch intrinsic does AVX2 32-byte compares. Byte-identity
+guaranteed (pure comparison equality) and verified: small corpus 32/32, big
+corpus (262MB large.jfr, 3x160MB JFR, gitpack, onnx-t5 + 6 real JFRs) 45/45
+compIdent + roundtrips at L1/8/9.
+E63 (delegate always past the 16B short tier): medians large262 +5.7%, serial
++1.5%, wat-c8 +14.9% BUT gitpack -11.0%, onnx -11.2%, movielens -3.3% — fixed
+call/range-check/setup overhead dominates for matches of ~20-100B. Worse: the
+d1 decode null control (extendMatch unused in decode!) read 1.051, i.e. the
+JFR-side "wins" mostly tracked machine-level bias.
+E63b (delegate only when remaining span >= 96B, scalar 32B block below):
+gitpack 1.000, onnx 1.043, movielens 0.977, large 0.992, serial 0.988,
+wat-c8 1.038, control 1.024 -> after control adjustment nothing exceeds
+~+2%: regressions fixed, win gone. REJECTED both variants; reverted.
+Lessons: (a) the inline 4x-long 32B block amortizes below ~96B, intrinsic
+crossover is real but the long-match corpora gains do not survive control
+adjustment on this host; (b) d1/decode null-control runs are mandatory
+machine-drift calibration — without the 1.051 control, E63's large262
+1.057 would have been a false-positive keep (second trap instance this
+session after the E61 JFR attribution bias).
