@@ -373,3 +373,44 @@ for full blocks (no double-copy); XXHash32 only fires with checksums enabled.
 JFR showed 42% of decode@1 in VarHandleByteArrayAsLongs.index; swapping the
 four VarHandle ops for one System.arraycopy intrinsic was -44% on serial-gc
 decode (arraycopy fixed setup >> 2 vector pairs for 16B). Reverted.
+
+## prof11 (SapMachine JDK 25, M4 Pro): current cost map after E55
+c1 serial-160m (883.6 MB/s): ~63% across the two extendMatch call sites in
+compressFast — genuine match work; 16B/32B long loop :892 = 16.4%, byte-tail
+:908 = 3.0%; parse-loop overhead ~5% -> near-saturated.
+c8 serial-160m (229.3 MB/s): chain-walk reject tail compressJavaImpl:239 =
+38.7%, insertion :328 = 20.6%, lazy walk :284 = 14.5% (walk+insert ~75%);
+extendMatch ~11%. Walk reduction is the only fat target, but every
+ratio-neutral attempt so far (E17/E27/E35/E44/E45) regressed; E55 tail-exit
+stays the keeper.
+c8 wat-160m (447.4 MB/s): extendMatch :892 = 12.3%, byte-tail :908 = 9.9%.
+d1/d8 serial (2706.7/2896.9 MB/s): 37-38% VarHandleByteArrayAsLongs.index +
+~50% match/literal copies -> near-saturated on this host.
+
+## E61 (REJECTED): masked 8-byte final tier in extendMatch (kill byte loop :908)
+Replaced the 1..7-iteration byte tail with one masked LONG_LE compare ending
+exactly at maxMatch (bounds-safe; maxMatch>=8 guard keeps a tiny byte loop for
+the corner). Byte-identical output proven (new ABVerify driver: 14 files x
+levels 1/3/8/9 = 56 combos, compIdent=true + roundtrips). DualBench medians
+B/A: wat-c8 0.997 (two runs, tight), json-c8 1.006 (8x2.0s windows),
+serial-c1 1.005, mixed-c1 0.991; serial-c8 windows held ~1 op ->
+drift-dominated (1.047, then 1.085 with opposite intra-run steps - unusable);
+d1 null-control 1.007 (+/-3% round noise). No win anywhere -> the 9.9% JFR
+share on the byte loop was async-sample bias into a tight load loop, not
+retiring cost. Same trap as E15/E60; third confirmation that on this host a
+>=10% JFR line share on a single-line micro-loop needs A/B falsification
+before it earns an experiment. Reverted.
+
+## E62 (KEPT): decode dispatch prefers Java; native decode opt-in
+The log has long recorded Java block decode as 1.5-2.5x faster than the
+bundled native port everywhere measured, yet LZ4.decompress() (the public
+dispatch, also used by LZ4FrameInputStream for independent/raw-block frames)
+preferred native. Reproduced in-session on serial-160m dispatch decode:
+1610.6 MB/s native-first (HEAD baseline jar and current jar +
+-Dfemtolz4.preferNativeDecode=true identical - falsifiable control) vs
+2835.3 MB/s with the flip -> +76% user-visible decode throughput. Native
+decode stays reachable via the property for cross-validation; block-dependent
+frame decode was already pure Java. Malformed-input behavior unchanged:
+previously native returned <0 and the Java path then threw; Java-first throws
+directly. Full mvn suite with native built: 562 tests, 0 failures, 0 errors
+(9 deep-fuzz group skips as before).
