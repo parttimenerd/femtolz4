@@ -436,3 +436,28 @@ adjustment on this host; (b) d1/decode null-control runs are mandatory
 machine-drift calibration — without the 1.051 control, E63's large262
 1.057 would have been a false-positive keep (second trap instance this
 session after the E61 JFR attribution bias).
+
+**E64 — slim chain tail entries (fp16+delta16 ints; long[] 512 KB -> int[] 256 KB): REJECTED**
+Hypothesis: the c8 chain-walk reject path is pointer-chase load-latency-bound
+through the 512 KB long[] chainTail; halving it to int[] (fp16 = discarded low
+bits of the bucket product as fingerprint, delta16 back-links, 0xFFFF sentinel)
+should cut reject cost. Provably byte-identical (examined deltas are
+mathematically <= 65534; sentinel terminates exactly where the old limit check
+would) and ABVerify confirmed: 115/115 combos compIdent at L1/2/3/8/9.
+Results — and the session's biggest methodology find: DualBench window mode
+QUANTIZES when one compress op costs >= ~2 s (160 MB c8 corpora: 3-6 ops per
+4-12 s window -> per-window B/A swings 0.44-2.25; medians of that are garbage:
+same setup gave c8-serial 1.188 @2 s vs 0.986 @12 s windows). Added to
+DualBench: (a) alternating first-measured side per round (fixes systematic
+turbo/thermal bias: decode null control went 0.928 biased -> 0.998 clean);
+(b) mode "o<N>" fixed-op timing. Controls this evening wandered 0.928..1.120
+on identical decode code -> host noise band ±5-10%; all keep decisions must be
+control-bracketed. Trustworthy rows (json-10m, 2 s x10, 20-40 ops/window):
+c8 json +4.7% but c3 json (chain=4, shallow walks, high hit rate) MINUS 20.4%
+(fp16 verify load + branchy chainDelta on the insert path are pure overhead
+when nearly every candidate is accepted; cache halving buys nothing at short
+chains). 160 MB c8 rows at 12 s: serial 0.986, wat 0.933 vs bracketing decode
+controls 0.942..1.120, i.e. parity-to-negative. c8-json +4.7% cannot offset a
+-20% shallow-chain regression. Reverted (git checkout). Kept: DualBench.java
+only. Lesson: window-mode medians on >=2 s/op workloads are unusable — use
+json-scale corpora for windows or op-mode; and always alternate measure order.

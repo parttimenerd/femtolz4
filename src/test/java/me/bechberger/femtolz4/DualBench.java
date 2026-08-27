@@ -33,6 +33,11 @@ public class DualBench {
         String mode = a.length > 6 ? a[6] : "d";
         URLClassLoader clA = new URLClassLoader(new URL[]{new URL(a[4])}, null);
         URLClassLoader clB = new URLClassLoader(new URL[]{new URL(a[5])}, null);
+        if (mode.startsWith("o")) {   // "o<N>": time N full compress ops per measurement
+            int n = mode.length() > 1 ? Integer.parseInt(mode.substring(1)) : 3;
+            opBench(src, level, rounds, clA, clB, n);
+            return;
+        }
         if (mode.equals("c")) { compBench(src, level, wsec, rounds, clA, clB); return; }
         byte[] comp;
         {
@@ -55,8 +60,17 @@ public class DualBench {
         System.out.println("win  A_MBps  B_MBps   B/A");
         double[] ratios = new double[rounds];
         for (int r = 0; r < rounds; r++) {
-            double ra = window(decA, comp, outA, wsec);
-            double rb = window(decB, comp, outB, wsec);
+            /* Alternate which side measures first each round: the first
+               window of a pair systematically gets turbo/thermal headroom,
+               which otherwise biases every ratio the same direction. */
+            double ra, rb;
+            if ((r & 1) == 0) {
+                ra = window(decA, comp, outA, wsec);
+                rb = window(decB, comp, outB, wsec);
+            } else {
+                rb = window(decB, comp, outB, wsec);
+                ra = window(decA, comp, outA, wsec);
+            }
             ratios[r] = rb / ra;
             System.out.printf("%d %8.1f %8.1f %7.3f%n", r, ra, rb, rb/ra);
         }
@@ -78,17 +92,61 @@ public class DualBench {
         double[] ratios = new double[rounds];
         System.out.println("win  A_MBps  B_MBps   B/A");
         for (int r = 0; r < rounds; r++) {
-            double ra; { long ops=0, t=System.nanoTime(), e=t+(long)(wsec*1e9);
-                while (System.nanoTime()<e) { cmA.invoke(cA, src, 0, src.length, d1, 0, d1.length); ops++; }
-                ra = ops*(double)src.length/((System.nanoTime()-t)/1e9)/1e6; }
-            double rb; { long ops=0, t=System.nanoTime(), e=t+(long)(wsec*1e9);
-                while (System.nanoTime()<e) { cmB.invoke(cB, src, 0, src.length, d2, 0, d2.length); ops++; }
-                rb = ops*(double)src.length/((System.nanoTime()-t)/1e9)/1e6; }
+            /* E64: alternate first-measured side per round (turbo bias fix). */
+            boolean aFirst = (r & 1) == 0;
+            double ra, rb;
+            if (aFirst) {
+                ra = compWindow(cmA, cA, src, d1, wsec);
+                rb = compWindow(cmB, cB, src, d2, wsec);
+            } else {
+                rb = compWindow(cmB, cB, src, d2, wsec);
+                ra = compWindow(cmA, cA, src, d1, wsec);
+            }
             ratios[r] = rb/ra;
             System.out.printf("%d %8.1f %8.1f %7.3f%n", r, ra, rb, rb/ra);
         }
         Arrays.sort(ratios);
         System.out.printf("median B/A ratio: %.3f\n", ratios[rounds/2]);
+    }
+    /* E64: fixed-op timing for large corpora — window mode quantizes when one
+       compress op costs seconds (fractional-op boundary error ±1/ops ≈ ±25%).
+       Times N full ops each side, alternating first side per round. */
+    static void opBench(byte[] src, int level, int rounds, URLClassLoader clA, URLClassLoader clB, int n) throws Exception {
+        Object cA = make(clA, "comp", level), cB = make(clB, "comp", level);
+        byte[] d1 = new byte[(int)(src.length*1.03)+64], d2 = new byte[d1.length];
+        java.lang.reflect.Method cmA = cA.getClass().getMethod("compress", byte[].class, int.class, int.class, byte[].class, int.class, int.class);
+        java.lang.reflect.Method cmB = cB.getClass().getMethod("compress", byte[].class, int.class, int.class, byte[].class, int.class, int.class);
+        int clenA = (int) cmA.invoke(cA, src, 0, src.length, d1, 0, d1.length);
+        int clenB = (int) cmB.invoke(cB, src, 0, src.length, d2, 0, d2.length);
+        System.out.println("compLen A=" + clenA + " B=" + clenB);
+        long t0 = System.nanoTime();
+        while (System.nanoTime() - t0 < 8e9) { cmA.invoke(cA, src, 0, src.length, d1, 0, d1.length); cmB.invoke(cB, src, 0, src.length, d2, 0, d2.length); }
+        double[] ratios = new double[rounds];
+        System.out.println("win  A_MBps  B_MBps   B/A");
+        for (int r = 0; r < rounds; r++) {
+            double ra, rb;
+            if ((r & 1) == 0) {
+                ra = opTime(cmA, cA, src, d1, n);
+                rb = opTime(cmB, cB, src, d2, n);
+            } else {
+                rb = opTime(cmB, cB, src, d2, n);
+                ra = opTime(cmA, cA, src, d1, n);
+            }
+            ratios[r] = rb/ra;
+            System.out.printf("%d %8.1f %8.1f %7.3f%n", r, ra, rb, rb/ra);
+        }
+        java.util.Arrays.sort(ratios);
+        System.out.printf("median B/A ratio: %.3f%n", ratios[rounds/2]);
+    }
+    static double opTime(java.lang.reflect.Method cm, Object c, byte[] src, byte[] dst, int n) throws Exception {
+        long t = System.nanoTime();
+        for (int i = 0; i < n; i++) cm.invoke(c, src, 0, src.length, dst, 0, dst.length);
+        return n * (double) src.length / ((System.nanoTime() - t) / 1e9) / 1e6;
+    }
+    static double compWindow(java.lang.reflect.Method cm, Object c, byte[] src, byte[] dst, double wsec) throws Exception {
+        long ops = 0, t = System.nanoTime(), e = t + (long)(wsec * 1e9);
+        while (System.nanoTime() < e) { cm.invoke(c, src, 0, src.length, dst, 0, dst.length); ops++; }
+        return ops * (double) src.length / ((System.nanoTime() - t) / 1e9) / 1e6;
     }
     static double window(Dec d, byte[] comp, byte[] out, double secs) {
         long ops = 0; long t0 = System.nanoTime(); long end = t0 + (long)(secs*1e9);
