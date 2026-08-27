@@ -476,3 +476,34 @@ restructures: all regressed) and E64 (byte-identical 256 KB tail: -20% c3),
 the c8 chain-walk + insert costs are eliminated by exhaustion of byte-identical
 angles; the remaining gap is the serial dependent-load chase itself. Compress
 work concludes at b02c044: E55+E62 kept, E61/E63/E64 rejected-and-logged.
+
+## N1-N5 (native port, day session, contended host): E55 ported to C; NEON extend & memset-255 rejected
+Scope: improve the bundled native compressor (src/main/native/lz4_src.c,
+libfemtolz4.dylib) for binary data (JFR corpora) on darwin-aarch64 (M4).
+
+- N1 NEON match-extension (16B veorq + 2x GPR lane extract; v1 all-NEON tier,
+  v2 scalar-8B-probe-first): REJECTED. Standalone microbench
+  (4096 crafted extends x 4000 reps, warm): short(4-13B) 4.66 vs 5.11 ns,
+  mid(12-59B) 9.48 vs 12.26 ns in favour of NEON-v2, but long(64-763B)
+  24.2/22.5 ns vs 16.37 ns scalar — the two umov lane extracts serialize on
+  long matches, which dominate realistic binary corpora. Steady-state
+  ProfileDriver c8 serial interleave of jars: [NEON] 123.0 / [scalar] 195.7 /
+  [NEON] 313.2 MB/s — inconclusive under host contention (load avg ~14.6,
+  ±40% swings on IDENTICAL binaries across back-to-back runs; A/jar-N0 itself
+  measured 167.8 and 195.7 the same day, 212.5 in prof12 on the quiet night
+  host). Microbench verdict stands alone: no NEON for long matches.
+- N2 write_length_overflow memset(0xFF-runs): REJECTED pre-measurement by
+  analysis — long-match corpora emit 1-4 255-bytes per run; a PLT memset call
+  for 1-4 bytes loses to the unrolled byte loop. Not measured end-to-end.
+- N5 E55 tail-exit ported into lz4__insert_and_match
+  (`if (len >= 64 && chain_len > 2) chain_len = 2;`): KEPT, pending flag.
+  Output byte-identical (encIdent + equal compLen) on json-10m L3/L8 and
+  jfr-gcdet-serial-160m L8 — the clip never fires a different parse, so it is
+  a pure chain-walk work cut on long-match binary data (Java E55 analog).
+  Perf: genuinely unmeasurable today — DualBench c3-json B/A rolled 0.914 and
+  0.969 on the same jars an hour apart; decode controls drifted 0.92-1.15.
+  Verdict PENDING quiet-host confirmation; risk bounded by byte-identity.
+- Correctness: mvn test green (562 tests) with the N5 dylib.
+- Tooling notes: (1) DualBench "o<N>-mode" wsec must NOT be 0 — wsec=0 yields
+  0-op windows -> 0/0 = NaN medians (poisoned two runs). (2) compBench now
+  prints encIdent (encoder byte-identity A/B) + compLen — retained.

@@ -87,6 +87,8 @@ public class DualBench {
         int clenA = (int) cmA.invoke(cA, src, 0, src.length, d1, 0, d1.length);
         int clenB = (int) cmB.invoke(cB, src, 0, src.length, d2, 0, d2.length);
         System.out.println("compLen A=" + clenA + " B=" + clenB + " ratioA=" + (double)src.length/clenA + " ratioB=" + (double)src.length/clenB);
+        boolean ident = clenA == clenB && java.util.Arrays.equals(d1, 0, clenA, d2, 0, clenB);
+        System.out.println("encIdent=" + ident);
         long t0 = System.nanoTime();
         while (System.nanoTime() - t0 < 6e9) { cmA.invoke(cA, src, 0, src.length, d1, 0, d1.length); cmB.invoke(cB, src, 0, src.length, d2, 0, d2.length); }
         double[] ratios = new double[rounds];

@@ -208,6 +208,11 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t * restrict
             int len = lz4__extend_match(src, sv, pos, max_match);
             if (len > best_len) {
                 best_len = len; best_dist = pos - sv;
+                /* E55: after a long find, remaining candidates rarely beat it by
+                   enough to matter — clip the walk. Output stayed byte-identical
+                   on json-10m (L3/L8) and jfr-gcdet-serial-160m (L8) because later
+                   candidates never exceed the >=64 find anyway; pure work cut. */
+                if (len >= 64 && chain_len > 2) chain_len = 2;
                 if (len == max_match) break;
             }
         }
