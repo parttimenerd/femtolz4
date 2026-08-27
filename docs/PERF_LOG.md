@@ -461,3 +461,18 @@ controls 0.942..1.120, i.e. parity-to-negative. c8-json +4.7% cannot offset a
 -20% shallow-chain regression. Reverted (git checkout). Kept: DualBench.java
 only. Lesson: window-mode medians on >=2 s/op workloads are unusable — use
 json-scale corpora for windows or op-mode; and always alternate measure order.
+
+## prof12 at b02c044 + native parity check: c8 compress goal reached, walk/insert exhausted
+Fresh JFR cost map at HEAD: c8-serial 229.3 MB/s — walk reject :239 = 38.7%,
+insert loop :328 = 20.4%, lazy :284+:288 = 20.7%, extendMatch ~7%; c8-json
+529.5 MB/s — insert 35.3%, walk 28.7%; c3-json 811.6 MB/s — insert 41.5%;
+c1-serial 855.6 MB/s — compressFast extendMatch+parse ~70% (near-saturated)
+⇒ map unchanged since prof11. Native reference measured identically
+(ProfileDriver steady 30 s): native c8 serial = 212.5, json = 496.7 MB/s
+⇒ Java c8 is +8%/+7% FASTER than native liblz4 on both corpora — the
+"compressor perf parity-to-better, prefer c8" goal is achieved end-to-end.
+Combined with E13 (insert stride: -25% revert), E17/E27/E35/E44/E45 (walk
+restructures: all regressed) and E64 (byte-identical 256 KB tail: -20% c3),
+the c8 chain-walk + insert costs are eliminated by exhaustion of byte-identical
+angles; the remaining gap is the serial dependent-load chase itself. Compress
+work concludes at b02c044: E55+E62 kept, E61/E63/E64 rejected-and-logged.
