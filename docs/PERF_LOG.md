@@ -507,3 +507,26 @@ libfemtolz4.dylib) for binary data (JFR corpora) on darwin-aarch64 (M4).
 - Tooling notes: (1) DualBench "o<N>-mode" wsec must NOT be 0 — wsec=0 yields
   0-op windows -> 0/0 = NaN medians (poisoned two runs). (2) compBench now
   prints encIdent (encoder byte-identity A/B) + compLen — retained.
+
+## N6/N3: scalar extend unroll (8B probe + dual-8B 16B iters) + walk accept-path tail prefetch (pending perf)
+Host still contended (load 16..39 all day) -> end-to-end A/B unusable
+(±40% swings); both changes are output-neutral and gated on microbench +
+correctness, with perf verdict PENDING a quiet host.
+
+- N6 (lz4__extend_match): one 8-byte probe then 16-byte iterations of two
+  INDEPENDENT 8B XOR/ctz pairs + 8B tail. Standalone microbench
+  (/tmp/ext2.c, 4096 crafted extends x 3000 reps x3, medians stable:
+  rep-to-rep ±10-15% under load) — short(4-13B): 1.10x; mid(12-59B): 1.00x;
+  mix: 1.07x; long(64-763B): 1.19-1.35x; vlong(512-3600): 1.19-1.34x vs the
+  plain 8B loop. This is the N1 lesson inverted correctly: NEON 16B lost on
+  long matches only because of serialized GPR lane-extracts; scalar pairs
+  keep the wide stride without the transfer latency.
+- N3 (lz4__insert_and_match, chain walk accept path): __builtin_prefetch of
+  tail[candidate & WINDOW_MASK] right before the possibly-long extend_match
+  call — overlaps the walk's next dependent L2/L3 load with the extension.
+  Mechanism-only claim; no microbench (in-path effect, host too noisy for
+  end-to-end). Low risk: one extra prefetch op on accepted candidates only.
+- Byte-identity: encIdent=true json-10m L8; compLen identical serial-160m L8
+  (45,579,791 both). mvn green (562 tests).
+Early perf probe below this entry (nat6-c8j.log) if readable; verdicts remain
+PENDING along with N5's.

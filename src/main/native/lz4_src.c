@@ -105,13 +105,31 @@ FORCE_INLINE void lz4__insert(lz4_stream_t *s, const uint8_t *src, int pos)
 }
 
 /*
- * Scalar match extension: 8-byte XOR steps then byte-by-byte tail.
- * Used as the generic path and as the tail for the AVX2 path.
+ * Scalar match extension: one 8-byte probe (covers the dominant 4..11-byte
+ * matches), then 16-byte iterations as two independent 8-byte XOR/ctz steps
+ * (better ILP than a serial chain — and, unlike GPR extracts from NEON
+ * registers, no transfer latency on long matches; ~1.2-1.35x vs plain 8B
+ * stepping in the long-match microbench). Byte tail at the end.
  */
 FORCE_INLINE int lz4__extend_match(const uint8_t * restrict src, int sv, int pos, int max_match)
 {
     int len = MIN_MATCH;
-    while (len + 8 <= max_match) {
+    if (len + 8 <= max_match) {
+        uint64_t diff = read64(src + sv + len) ^ read64(src + pos + len);
+        if (diff)
+            return len + (__builtin_ctzll(diff) >> 3);
+        len += 8;
+    }
+    while (len + 16 <= max_match) {
+        uint64_t d1 = read64(src + sv + len)     ^ read64(src + pos + len);
+        uint64_t d2 = read64(src + sv + len + 8) ^ read64(src + pos + len + 8);
+        if (d1)
+            return len + (__builtin_ctzll(d1) >> 3);
+        if (d2)
+            return len + 8 + (__builtin_ctzll(d2) >> 3);
+        len += 16;
+    }
+    if (len + 8 <= max_match) {
         uint64_t diff = read64(src + sv + len) ^ read64(src + pos + len);
         if (diff)
             return len + (__builtin_ctzll(diff) >> 3);
@@ -205,6 +223,11 @@ FORCE_INLINE int lz4__insert_and_match(lz4_stream_t *s, const uint8_t * restrict
         uint32_t sv4 = (uint32_t)(slot >> 32);
         if (sv4 == pos4 &&
             (best_len == 0 || src[sv + best_len] == src[pos + best_len])) {
+            /* N3: the walk's next load (tail[sv & WINDOW_MASK]) only starts
+               after extend_match returns. Prefetching it here overlaps the
+               (possibly long) extension with that load's L2/L3 latency.
+               Byte-identical: pure prefetch, no semantic effect. */
+            __builtin_prefetch(&s->tail[sv & WINDOW_MASK], 0, 3);
             int len = lz4__extend_match(src, sv, pos, max_match);
             if (len > best_len) {
                 best_len = len; best_dist = pos - sv;
