@@ -1,0 +1,131 @@
+tag: ready
+maven_coordinates: me.bechberger:femtolz4
+tagline: LZ4 frame compression for Java. Around 50 KB, zero transitive dependencies, full streaming
+  and block API, pure Java with optional native acceleration on linux/amd64 and darwin/aarch64.
+  Designed for Java agents, embedded tools, and minimal distributions where lz4-java's 870 KB is too heavy.
+tagline_short: LZ4 compression for Java — ~50 KB, zero dependencies, streaming + block API, lz4-java-inspired
+  API for size-sensitive projects.
+when_to_use:
+- JAR size matters — Java agents, embedded tools, minimal distributions
+- You want lz4-java-inspired API (similar classes/methods, not a drop-in) with zero transitive deps
+- You need readSingleFrame support (e.g. reading CJFR files)
+- You only need linux/amd64 or darwin/aarch64 native acceleration
+when_not_to_use:
+- You need native acceleration on Windows or non-amd64 Linux
+- You need lz4opt compression (lz4-java levels 11–17)
+- You need dependent-block frame encoding
+vs:
+  name: lz4-java
+  url: https://github.com/lz4/lz4-java
+  bottom_line: Pick femtolz4 when JAR size matters and you only need linux/mac — API is similar to
+    lz4-java but not a drop-in replacement. Pick lz4-java for broad platform coverage, lz4opt levels,
+    or when you need a true drop-in.
+  comparison:
+  - feature: JAR size
+    self: ~50 KB
+    other: ~870 KB
+  - feature: Dependencies
+    self: None
+    other: None
+  - feature: Compression levels
+    self: 1–10
+    other: 1–17 (incl. lz4opt)
+  - feature: Native platforms
+    self: linux/amd64, darwin/aarch64
+    other: All major OS/arch
+  - feature: LZ4 frame format
+    self: ✓
+    other: ✓
+  - feature: Block API
+    self: ✓
+    other: ✓
+  - feature: xxHash-32
+    self: ✓
+    other: ✓
+  - feature: API compatibility
+    self: Similar to lz4-java, not a drop-in
+    other: —
+related:
+- label: condensed-data
+  url: https://github.com/parttimenerd/condensed-data
+install:
+- label: Maven
+  lang: xml
+  code: |
+    <dependency>
+      <groupId>me.bechberger</groupId>
+      <artifactId>femtolz4</artifactId>
+      <version>VERSION</version>
+    </dependency>
+- label: Gradle
+  lang: groovy
+  code: implementation 'me.bechberger:femtolz4:VERSION'
+usage:
+- label: Frame stream
+  lang: java
+  code: |
+    try (var out = new LZ4FrameOutputStream(Files.newOutputStream(path))) {
+        out.write(data);
+    }
+    try (var in = new LZ4FrameInputStream(Files.newInputStream(path))) {
+        byte[] restored = in.readAllBytes();
+    }
+- label: Block API
+  lang: java
+  code: |
+    byte[] compressed = LZ4.compress(data);
+    byte[] original   = LZ4.decompress(compressed, originalSize);
+how_to:
+- title: Choose a compression level
+  body: |
+    Levels run from 1 (`LEVEL_FAST`, default) to 10 (`LEVEL_OPTIMAL`):
+    ```java
+    new LZ4FrameOutputStream(out)     // level 1 — fastest, good ratio (default)
+    new LZ4FrameOutputStream(out, 5)  // balanced
+    new LZ4FrameOutputStream(out, 9)  // best ratio, still fast (LEVEL_MAX / LEVEL_DEFAULT)
+    new LZ4FrameOutputStream(out, 10) // optimal parser, ~5–10× slower, +1.5–2.6% ratio over 9
+    ```
+    The default 4 MiB block size works well for most cases. Use a smaller block (64 KiB, 256 KiB)
+    to reduce peak memory, a larger one (4 MiB) to improve ratio on compressible data.
+
+- title: Read a single embedded LZ4 frame (e.g. CJFR files)
+  body: |
+    When an LZ4 frame is embedded inside a larger format with a non-LZ4 footer,
+    use `readSingleFrame=true` to stop after the first frame and leave trailing
+    bytes on the stream:
+    ```java
+    try (var in = new LZ4FrameInputStream(rawStream, true)) {
+        byte[] frameData = in.readAllBytes();
+    }
+    // rawStream is now positioned immediately after the LZ4 end mark
+    ```
+
+- title: Reuse a compressor handle to avoid hash-table allocation
+  body: |
+    For tight loops compressing many small buffers, reuse a `Compressor` handle so
+    its internal hash table is not re-allocated on every call:
+    ```java
+    LZ4.Compressor c = LZ4.compressor(LZ4.LEVEL_FAST); // or any level
+    for (byte[] chunk : chunks) {
+        try (var out = new LZ4FrameOutputStream(sink, c)) {
+            out.write(chunk);
+        }
+    }
+    ```
+
+- title: Use the block API for custom binary formats
+  body: |
+    Use raw blocks when you manage block boundaries yourself and store the original
+    size externally (no frame header overhead):
+    ```java
+    byte[] compressed = LZ4.compress(data);      // level 1 (fastest)
+    byte[] compressed = LZ4.compressHigh(data);  // level 9 (best ratio)
+
+    // Decompress — you must supply the original uncompressed size
+    byte[] original = LZ4.decompress(compressed, originalSize);
+
+    // Pre-allocate a destination buffer
+    int maxLen = LZ4.maxCompressedLength(data.length);
+    byte[] dst  = new byte[maxLen];
+    int len     = LZ4.compress(data, 0, data.length, dst, 0, LZ4.MAX_CHAIN);
+    ```
