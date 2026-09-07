@@ -76,6 +76,31 @@ usage:
     byte[] compressed = LZ4.compress(data);
     byte[] original   = LZ4.decompress(compressed, originalSize);
 how_to:
+- title: Compress and decompress data with the streaming API
+  body: |
+    Wrap any `OutputStream`/`InputStream` — the LZ4 frame format handles all framing
+    and checksums automatically:
+    ```java
+    import me.bechberger.femtolz4.LZ4FrameOutputStream;
+    import me.bechberger.femtolz4.LZ4FrameInputStream;
+    import java.nio.file.Files;
+    import java.nio.file.Path;
+
+    // Compress
+    try (var out = new LZ4FrameOutputStream(
+            Files.newOutputStream(Path.of("data.lz4")))) {
+        out.write(myBytes);
+    }
+
+    // Decompress
+    try (var in = new LZ4FrameInputStream(
+            Files.newInputStream(Path.of("data.lz4")))) {
+        byte[] restored = in.readAllBytes();
+    }
+    ```
+    Default settings (level 1, 4 MiB blocks) give the best speed. See below for
+    tuning compression level or block size.
+
 - title: Choose a compression level
   body: |
     Levels run from 1 (`LEVEL_FAST`, default) to 10 (`LEVEL_OPTIMAL`):
